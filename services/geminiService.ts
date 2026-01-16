@@ -18,30 +18,24 @@ const fileToGenerativePart = async (file: File): Promise<string> => {
 const wait = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
 // --- CONFIGURATION ---
-const getBackendUrl = () => {
-  // 1. Detección de Producción segura
-  try {
-    // Usamos ?. (optional chaining) para evitar el crash si import.meta o env son undefined
-    // @ts-ignore
-    if (import.meta?.env?.PROD) {
-      // Si estamos en producción, el frontend es servido por el mismo servidor Flask.
-      // Devolvemos una cadena vacía para que fetch use rutas relativas (ej: "/analyze")
-      return ''; 
-    }
-  } catch (e) {
-    // Si falla el acceso a import.meta, ignoramos silenciosamente y seguimos al fallback
+export const getBackendUrl = () => {
+  // 1. CRÍTICO PARA CLOUD RUN:
+  // Si estamos en producción (build), forzamos ruta relativa vacía ('').
+  // Esto hace que las peticiones vayan a "/api/history" en el MISMO dominio donde está la web.
+  // @ts-ignore
+  if (import.meta.env.PROD) {
+    return '';
   }
 
-  // 2. Variable explícita de entorno (si existe)
-  // Nota: process.env.VITE_API_URL es reemplazado por vite.config.ts durante el build
+  // 2. Desarrollo Local: Usar variable de entorno o fallback
   const envUrl = process.env.VITE_API_URL;
   if (envUrl) return envUrl.replace(/\/$/, "");
-  
-  // 3. Desarrollo Local (Fallback por defecto para desarrollo separado)
+
+  // 3. Fallback final para local
   return 'http://localhost:5000';
 };
 
-const BACKEND_URL = getBackendUrl();
+export const API_BASE_URL = getBackendUrl();
 
 // Secondary service function to get Grounding Data (Search + Maps)
 const getGroundingInfo = async (ai: GoogleGenAI, query: string): Promise<GroundingLink[]> => {
@@ -56,7 +50,6 @@ const getGroundingInfo = async (ai: GoogleGenAI, query: string): Promise<Groundi
           { googleSearch: {} },
           { googleMaps: {} }
         ],
-        // responseMimeType is not allowed when using googleMaps
       }
     });
 
@@ -97,23 +90,18 @@ export const analyzeTravelVideo = async (source: File | string): Promise<TravelA
   const apiKey = process.env.API_KEY;
   
   if (!apiKey) {
-    console.warn("Advertencia: API Key no encontrada. Asegúrate de configurar API_KEY o VITE_GOOGLE_API_KEY.");
+    console.warn("Advertencia: API Key no encontrada.");
   }
 
   // --- PATH 1: URL ANALYSIS (Via Python Backend) ---
   if (typeof source === 'string') {
     try {
-      // Construimos la URL del endpoint
-      // Si BACKEND_URL es '', el resultado es '/analyze' (ruta relativa)
-      const endpoint = `${BACKEND_URL}/analyze`;
+      const endpoint = `${API_BASE_URL}/analyze`;
       console.log(`📡 Conectando al Backend en: ${endpoint}`);
-      console.log(`📝 Procesando URL: ${source}`);
       
       const response = await fetch(endpoint, {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ url: source }),
       });
 
@@ -136,9 +124,6 @@ export const analyzeTravelVideo = async (source: File | string): Promise<TravelA
 
     } catch (error: any) {
       console.error("❌ Error de Backend:", error);
-      if (error.message.includes("Failed to fetch") || error.message.includes("NetworkError")) {
-        throw new Error(`No se pudo conectar con el servidor Backend. Si estás en local, verifica que server.py esté corriendo en el puerto 5000.`);
-      }
       throw error;
     }
   }
@@ -155,42 +140,18 @@ export const analyzeTravelVideo = async (source: File | string): Promise<TravelA
       category: {
         type: Type.STRING,
         enum: ['Lugar', 'Comida', 'Actividad', 'Consejo', 'Otro'],
-        description: "The category of the travel content.",
       },
-      placeName: {
-        type: Type.STRING,
-        description: "The exact name of the place found via OCR or audio.",
-      },
-      estimatedLocation: {
-        type: Type.STRING,
-        description: "City and Country.",
-      },
-      priceRange: {
-        type: Type.STRING,
-        description: "Estimated price found in video visual numbers or audio.",
-      },
-      summary: {
-        type: Type.STRING,
-        description: "A concise 1-sentence summary.",
-      },
-      // New Critical Fields
-      score: {
-        type: Type.INTEGER,
-        description: "Rating from 1 to 5 based on realism and quality.",
-      },
+      placeName: { type: Type.STRING },
+      estimatedLocation: { type: Type.STRING },
+      priceRange: { type: Type.STRING },
+      summary: { type: Type.STRING },
+      score: { type: Type.INTEGER },
       confidenceLevel: {
         type: Type.STRING,
         enum: ["Alto", "Medio", "Bajo"],
-        description: "How confident are you that this place is real and the info is accurate?",
       },
-      criticalVerdict: {
-        type: Type.STRING,
-        description: "A short, skeptical justification for the score. E.g. 'Unrealistic prices for the area.'",
-      },
-      isTouristTrap: {
-        type: Type.BOOLEAN,
-        description: "True if it seems like a set for influencers or a rip-off.",
-      }
+      criticalVerdict: { type: Type.STRING },
+      isTouristTrap: { type: Type.BOOLEAN }
     },
     required: ["category", "placeName", "estimatedLocation", "priceRange", "summary", "score", "confidenceLevel", "criticalVerdict", "isTouristTrap"],
   };
@@ -200,40 +161,26 @@ export const analyzeTravelVideo = async (source: File | string): Promise<TravelA
   const promptText = `Actúa como un crítico de viajes escéptico y profesional. Analiza el video buscando inconsistencias. 
   
   Evalúa los siguientes puntos:
-  A. Realismo: ¿Los precios mencionados coinciden con la calidad visual de la comida/lugar? (Ej: Langosta a $5 es sospechoso).
-  B. Autenticidad: ¿Parece un sitio real o un set puramente para influencers? ¿Está vacío o lleno de locales?
+  A. Realismo: ¿Los precios mencionados coinciden con la calidad visual de la comida/lugar?
+  B. Autenticidad: ¿Parece un sitio real o un set puramente para influencers?
   C. Claridad: ¿Se ve el nombre del lugar o dirección clara?
 
-  Extrae la información básica (Nombre, Ubicación, Precio) Y ADEMÁS califica la recomendación:
-  - Puntuacion (1-5)
-  - Nivel de Confianza (Alto/Medio/Bajo)
-  - Veredicto Crítico (Justifica tu nota)
-  - Es Trampa (Detecta si es Tourist Trap)
-  
+  Extrae la información básica y califica la recomendación.
   Responde estrictamente con el JSON solicitado.`;
 
   const makeRequest = async (retryCount = 0): Promise<TravelAnalysis> => {
     try {
-      // Step 1: Video Analysis (Gemini Pro)
       const response = await ai.models.generateContent({
         model: modelName,
         contents: {
           parts: [
-            {
-              inlineData: {
-                mimeType: source.type,
-                data: base64Data
-              }
-            },
-            {
-              text: promptText
-            }
+            { inlineData: { mimeType: source.type, data: base64Data } },
+            { text: promptText }
           ]
         },
         config: {
           responseMimeType: "application/json",
           responseSchema: schema,
-          systemInstruction: "You are a senior travel data analyst and skeptical critic. You do not believe hype easily. You verify details against visual evidence.",
         }
       });
 
@@ -242,7 +189,6 @@ export const analyzeTravelVideo = async (source: File | string): Promise<TravelA
 
       const analysisResult = JSON.parse(text) as TravelAnalysis;
 
-      // Step 2: Grounding Check (Gemini Flash 2.5 with Tools)
       if (analysisResult.placeName && analysisResult.estimatedLocation) {
         const groundingQuery = `Find details and official website for "${analysisResult.placeName}" located in "${analysisResult.estimatedLocation}".`;
         const links = await getGroundingInfo(ai, groundingQuery);
@@ -252,18 +198,11 @@ export const analyzeTravelVideo = async (source: File | string): Promise<TravelA
       return analysisResult;
 
     } catch (error: any) {
-      // Handle Rate Limits (429)
-      const isRateLimit = error.message?.includes('429') || 
-                          error.status === 429 || 
-                          error.toString().includes('Resource has been exhausted');
-
+      const isRateLimit = error.message?.includes('429');
       if (isRateLimit && retryCount < 1) {
-        console.warn("Rate limit hit (429). Waiting 30 seconds before retrying...");
         await wait(30000); 
         return makeRequest(retryCount + 1);
       }
-
-      console.error("Gemini Analysis Error:", error);
       throw error;
     }
   };
@@ -271,11 +210,6 @@ export const analyzeTravelVideo = async (source: File | string): Promise<TravelA
   return makeRequest();
 };
 
-// --- AGENT AUTONOMOUS MODES ---
-
-/**
- * 1. Brain: Generates search queries based on user intent.
- */
 export const generateSearchStrategy = async (userDescription: string): Promise<string[]> => {
   const apiKey = process.env.API_KEY;
   if (!apiKey) throw new Error("No API Key");
@@ -283,46 +217,27 @@ export const generateSearchStrategy = async (userDescription: string): Promise<s
 
   const response = await ai.models.generateContent({
     model: 'gemini-3-pro-preview',
-    contents: `Eres un experto estratega de viajes. Basado en este perfil de usuario: "${userDescription}", genera una lista de 5 búsquedas específicas y optimizadas para encontrar las mejores recomendaciones (joyas ocultas, comida, lugares).
-    
-    Incluye variaciones como "mejores X", "X barato", "X vs Y", "trampas turísticas en X".
-    
-    Devuelve SOLO una lista de strings en formato JSON (Array de Strings). Ejemplo: ["query 1", "query 2"]`,
+    contents: `Eres un experto estratega de viajes. Basado en: "${userDescription}", genera 5 búsquedas optimizadas para Google Search. Devuelve JSON array strings.`,
     config: {
       responseMimeType: "application/json",
-      responseSchema:  {
-        type: Type.ARRAY,
-        items: { type: Type.STRING }
-      }
+      responseSchema: { type: Type.ARRAY, items: { type: Type.STRING } }
     }
   });
 
   return JSON.parse(response.text || "[]");
 };
 
-/**
- * 2. Crawler: Simulates "watching" a video by using Google Search Grounding to find a place matching the query
- * and analyzing it with the "Skeptical Critic" persona.
- */
 export const executeAutonomousStep = async (query: string): Promise<TravelAnalysis> => {
   const apiKey = process.env.API_KEY;
   if (!apiKey) throw new Error("No API Key");
   const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
 
-  // Use Gemini 3 Pro with Search to find a result and analyze it immediately
   const response = await ai.models.generateContent({
     model: 'gemini-3-pro-preview',
-    contents: `SEARCH GOAL: "${query}"
-    
-    1. Use Google Search to find ONE specific, real place/restaurant/activity that matches this search goal perfectly.
-    2. Act as the "Skeptical Critic". Analyze the search results (reviews, snippets).
-    3. Fill out the JSON schema for this place.
-    
-    If it looks like a tourist trap based on the search results, mark it as such.`,
+    contents: `SEARCH GOAL: "${query}". Find ONE real place. Analyze critically.`,
     config: {
       tools: [{ googleSearch: {} }],
       responseMimeType: "application/json",
-      // We reuse the same strict schema so it fits our DB
       responseSchema: {
         type: Type.OBJECT,
         properties: {
@@ -342,8 +257,7 @@ export const executeAutonomousStep = async (query: string): Promise<TravelAnalys
   });
 
   const analysis = JSON.parse(response.text || "{}") as TravelAnalysis;
-
-  // Add grounding links manually from the search result if available
+  
   const chunks = response.candidates?.[0]?.groundingMetadata?.groundingChunks;
   const links: GroundingLink[] = [];
   if (chunks) {
