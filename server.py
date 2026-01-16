@@ -11,54 +11,51 @@ from dotenv import load_dotenv
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
 
-# Load Environment Variables
+# --- CONFIGURACIÓN INICIAL ---
 load_dotenv()
-API_KEY = os.getenv("API_KEY") 
+API_KEY = os.getenv("API_KEY")
 
-# --- GOOGLE SHEETS SETUP ---
-SCOPES = ['https://www.googleapis.com/auth/spreadsheets', "https://www.googleapis.com/auth/drive"]
+# Configuración de Gemini
+if not API_KEY:
+    print("❌ ERROR: API_KEY not found.")
+try:
+    genai.configure(api_key=API_KEY)
+except Exception as e:
+    print(f"❌ Error Gemini: {e}")
 
+# Configuración Flask
+app = Flask(__name__, static_folder='dist', static_url_path='')
+CORS(app)
+
+# Memoria Local (Fallback)
+LOCAL_DB = []
+
+# --- CONEXIÓN A SHEETS ---
 def get_db_connection():
     creds_json = os.getenv("GOOGLE_CREDENTIALS_JSON")
     sheet_id = os.getenv("GOOGLE_SHEET_ID")
     
     if not creds_json or not sheet_id:
-        print("⚠️ Google Sheets no configurado. Usando memoria local.")
         return None
 
     try:
         creds_dict = json.loads(creds_json)
+        SCOPES = ['https://www.googleapis.com/auth/spreadsheets', "https://www.googleapis.com/auth/drive"]
         creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, SCOPES)
         client = gspread.authorize(creds)
         sheet = client.open_by_key(sheet_id).sheet1
         return sheet
     except Exception as e:
-        print(f"❌ Error conectando a Google Sheets: {e}")
+        print(f"❌ Error Sheets: {e}")
         return None
 
-# --- GEMINI SETUP ---
-if not API_KEY:
-    print("❌ ERROR: API_KEY not found in environment variables.")
-
-try:
-    genai.configure(api_key=API_KEY)
-except Exception as e:
-    print(f"❌ Error configuring Gemini: {e}")
-
-# --- FLASK SETUP ---
-app = Flask(__name__, static_folder='dist', static_url_path='')
-CORS(app)
-
-LOCAL_DB = []
-
-# --- HELPER FUNCTIONS ---
+# --- DESCARGA DE VIDEO ---
 def download_video(url):
-    print(f"⬇️ Iniciando descarga de: {url}")
+    print(f"⬇️ Descargando: {url}")
     temp_dir = tempfile.mkdtemp()
     timestamp = int(time.time())
     output_template = os.path.join(temp_dir, f'video_{timestamp}.%(ext)s')
 
-    # CONFIGURACIÓN OPTIMIZADA (MODO IPHONE)
     ydl_opts = {
         'format': 'worst[ext=mp4]', 
         'outtmpl': output_template,
@@ -66,58 +63,50 @@ def download_video(url):
         'no_warnings': True,
         'nocheckcertificate': True,
         'user_agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 14_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/14.0 Mobile/15E148 Safari/604.1',
-        'http_headers': {
-            'Referer': 'https://www.tiktok.com/',
-            'Accept-Language': 'en-US,en;q=0.9',
-        },
+        'http_headers': {'Referer': 'https://www.tiktok.com/'},
         'source_address': '0.0.0.0', 
     }
 
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             ydl.download([url])
-        
         files = glob.glob(os.path.join(temp_dir, 'video_*'))
-        if files:
-            print(f"✅ Video descargado en: {files[0]}")
-            return files[0]
+        if files: return files[0]
         return None
     except Exception as e:
-        print(f"❌ Download Error: {e}")
+        print(f"❌ Error descarga: {e}")
         return None
 
+# --- ANÁLISIS GEMINI ---
 def analyze_with_gemini(video_path):
-    print(f"📤 Subiendo {video_path} a Gemini...")
+    print(f"📤 Subiendo a Gemini...")
     try:
         video_file = genai.upload_file(path=video_path)
     except Exception as e:
-        raise Exception(f"Fallo al subir a Gemini: {e}")
+        raise Exception(f"Fallo subida: {e}")
     
-    print("⏳ Esperando procesamiento de video en la nube...")
     while video_file.state.name == "PROCESSING":
-        time.sleep(2)
+        time.sleep(1)
         video_file = genai.get_file(video_file.name)
 
     if video_file.state.name == "FAILED":
-        raise Exception("Video processing failed.")
+        raise Exception("Procesamiento fallido.")
 
-    print("🤖 Video listo. Generando análisis con IA...")
+    print("🤖 Analizando...")
     model = genai.GenerativeModel(model_name="gemini-2.5-flash")
     
     prompt = """
-    Actúa como un crítico de viajes escéptico y profesional. Analiza el video buscando inconsistencias.
-    
-    Extrae la información en formato JSON estricto:
+    Analiza el video. Devuelve JSON estricto:
     {
-      "category": "Lugar" | "Comida" | "Actividad" | "Consejo" | "Otro",
-      "placeName": "Nombre exacto",
-      "estimatedLocation": "Ciudad, País",
-      "priceRange": "Precio estimado",
-      "summary": "Resumen de 1 frase",
-      "score": 1-5 (Integer),
-      "confidenceLevel": "Alto" | "Medio" | "Bajo",
-      "criticalVerdict": "Justificación escéptica corta",
-      "isTouristTrap": boolean
+      "category": "Lugar/Comida/Otro",
+      "placeName": "Nombre",
+      "estimatedLocation": "Ciudad",
+      "priceRange": "Precio",
+      "summary": "Resumen",
+      "score": 0,
+      "confidenceLevel": "Alto",
+      "criticalVerdict": "Opinion",
+      "isTouristTrap": false
     }
     """
 
@@ -126,95 +115,70 @@ def analyze_with_gemini(video_path):
         generation_config={"response_mime_type": "application/json"}
     )
 
-    try:
-        genai.delete_file(video_file.name)
-    except:
-        pass
+    try: genai.delete_file(video_file.name)
+    except: pass
     
     raw_data = json.loads(response.text)
 
-    # --- FIX LISTAS ---
+    # Corrección de listas
     if isinstance(raw_data, list):
-        print("⚠️ Gemini devolvió una lista, extrayendo primer elemento...")
-        if len(raw_data) > 0:
-            raw_data = raw_data[0]
-        else:
-            raw_data = {} 
+        raw_data = raw_data[0] if len(raw_data) > 0 else {}
 
-    # --- BLOQUE DE SEGURIDAD (ANALISIS) ---
+    # Sanitización
     safe_data = {
-        "category": raw_data.get("category") or "Otro",
-        "placeName": raw_data.get("placeName") or "Lugar Desconocido",
-        "estimatedLocation": raw_data.get("estimatedLocation") or "Ubicación no encontrada",
-        "priceRange": raw_data.get("priceRange") or "Precio desconocido",
-        "summary": raw_data.get("summary") or "No se pudo generar resumen.",
+        "category": str(raw_data.get("category") or "Otro"),
+        "placeName": str(raw_data.get("placeName") or "Desconocido"),
+        "estimatedLocation": str(raw_data.get("estimatedLocation") or "No encontrada"),
+        "priceRange": str(raw_data.get("priceRange") or "??"),
+        "summary": str(raw_data.get("summary") or "Sin resumen"),
         "score": raw_data.get("score") or 0,
-        "confidenceLevel": raw_data.get("confidenceLevel") or "Bajo",
-        "criticalVerdict": raw_data.get("criticalVerdict") or "Sin veredicto",
-        "isTouristTrap": raw_data.get("isTouristTrap") if raw_data.get("isTouristTrap") is not None else False
+        "confidenceLevel": str(raw_data.get("confidenceLevel") or "Bajo"),
+        "criticalVerdict": str(raw_data.get("criticalVerdict") or "Sin veredicto"),
+        "isTouristTrap": bool(raw_data.get("isTouristTrap"))
     }
-
-    print("✅ Datos enviados al frontend:", safe_data)
     return safe_data
 
-# --- API ROUTES ---
+# --- RUTAS ---
 
 @app.route('/analyze', methods=['POST'])
 def analyze_video():
-    print("🔔 Petición recibida en /analyze")
     data = request.json
-    
-    if isinstance(data, list):
-        data = data[0]
+    if isinstance(data, list): data = data[0]
 
     url = data.get('url')
+    if not url: return jsonify({"error": "No URL"}), 400
 
-    if not url:
-        return jsonify({"error": "No URL provided"}), 400
+    video_path = download_video(url)
+    if not video_path: return jsonify({"error": "Error descarga"}), 500
 
-    video_path = None
     try:
-        video_path = download_video(url)
-        if not video_path:
-            return jsonify({"error": "Fallo al descargar el video."}), 500
-
-        analysis_result = analyze_with_gemini(video_path)
-        return jsonify(analysis_result)
-
+        result = analyze_with_gemini(video_path)
+        return jsonify(result)
     except Exception as e:
-        print(f"❌ Error en servidor: {e}")
         return jsonify({"error": str(e)}), 500
     finally:
         if video_path and os.path.exists(video_path):
             os.remove(video_path)
 
-# --- AQUI ESTABA EL ERROR: HEMOS BLINDADO ESTA FUNCIÓN ---
 @app.route('/api/history', methods=['GET'])
 def get_history():
     sheet = get_db_connection()
     raw_records = []
     
-    # 1. Intentar leer de Sheets o memoria local
     if sheet:
-        try:
-            raw_records = sheet.get_all_records()
-        except Exception as e:
-            print(f"Error leyendo Sheets: {e}")
-            raw_records = LOCAL_DB
+        try: raw_records = sheet.get_all_records()
+        except: raw_records = LOCAL_DB
     else:
         raw_records = LOCAL_DB
 
-    # 2. LIMPIEZA TOTAL (Para evitar el error 'toLowerCase')
-    # Esto revisa fila por fila y rellena huecos vacíos
+    # LIMPIEZA ANTI-CRASH
     clean_records = []
     for record in raw_records:
         if not isinstance(record, dict): continue
-        
         safe_record = {
             "id": str(record.get("id") or ""),
             "timestamp": record.get("timestamp") or 0,
             "placeName": str(record.get("placeName") or "Desconocido"),
-            # 'category' es el que suele causar el crash, aseguramos que sea texto
             "category": str(record.get("category") or "Otro"), 
             "score": record.get("score") or 0,
             "estimatedLocation": str(record.get("estimatedLocation") or ""),
@@ -244,21 +208,28 @@ def save_history():
                 data.get('fileName')
             ]
             sheet.append_row(row)
-            return jsonify({"status": "saved to cloud", "data": data})
-        except Exception as e:
-            print(f"Error guardando en Sheets: {e}")
+            return jsonify({"status": "saved"})
+        except:
             LOCAL_DB.append(data)
-            return jsonify({"status": "saved to local memory fallback", "data": data})
+            return jsonify({"status": "fallback"})
     else:
         LOCAL_DB.append(data)
-        return jsonify({"status": "saved to local memory", "data": data})
+        return jsonify({"status": "local"})
 
 @app.route('/health', methods=['GET'])
 def health_check():
-    return "Backend operativo", 200
+    return "OK", 200
 
-# --- STATIC FILES ---
+# Archivos estáticos
 @app.route('/', defaults={'path': ''})
 @app.route('/<path:path>')
 def serve(path):
-    if path != "" and os.path.exists(app.static
+    if path != "" and os.path.exists(app.static_folder + '/' + path):
+        return send_from_directory(app.static_folder, path)
+    else:
+        return send_from_directory(app.static_folder, 'index.html')
+
+# --- ARRANQUE DEL SERVIDOR ---
+if __name__ == '__main__':
+    port = int(os.environ.get("PORT", 5000))
+    app.run(host='0.0.0.0', port=port)
