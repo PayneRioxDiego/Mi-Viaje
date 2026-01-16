@@ -24,10 +24,18 @@ const getBackendUrl = () => {
   if (envUrl) return envUrl.replace(/\/$/, "");
   
   // 2. Producción: Detección segura a prueba de fallos
-  // Usamos optional chaining (?.) para que si 'env' no existe, devuelva undefined en lugar de crashear
-  const isProd = (import.meta as any).env?.PROD;
+  // Verificamos explícitamente si estamos en el navegador y si existe import.meta.env
+  let isProd = false;
+  try {
+    // @ts-ignore
+    isProd = import.meta.env?.PROD; 
+  } catch (e) {
+    isProd = false;
+  }
   
   if (isProd) {
+    // En producción (dentro del Docker), el backend sirve el frontend.
+    // Usamos una cadena vacía para que fetch use la misma URL base relativa.
     return ''; 
   }
   
@@ -97,10 +105,12 @@ export const analyzeTravelVideo = async (source: File | string): Promise<TravelA
   // --- PATH 1: URL ANALYSIS (Via Python Backend) ---
   if (typeof source === 'string') {
     try {
-      console.log(`📡 Conectando al Backend en: ${BACKEND_URL}/analyze`);
+      // Si BACKEND_URL está vacío (Prod), la URL será /analyze (relativa)
+      const endpoint = `${BACKEND_URL}/analyze`;
+      console.log(`📡 Conectando al Backend en: ${endpoint}`);
       console.log(`📝 Procesando URL: ${source}`);
       
-      const response = await fetch(`${BACKEND_URL}/analyze`, {
+      const response = await fetch(endpoint, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
