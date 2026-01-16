@@ -19,15 +19,19 @@ const wait = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
 // --- CONFIGURATION ---
 const getBackendUrl = () => {
+  // 1. Prioridad: Variable inyectada por Vite (vite.config.ts)
   const envUrl = process.env.VITE_API_URL;
-  // Si existe variable de entorno, úsala.
   if (envUrl) return envUrl.replace(/\/$/, "");
   
-  // Si estamos en producción (servidos desde Flask), usar URL relativa vacía para llamar al mismo dominio
-  // Si estamos en local (Vite dev server), usar localhost:5000
-  if ((import.meta as any).env.PROD) { 
+  // 2. Producción: Si estamos servidos por Flask (mismo origen)
+  // Corregido: Verificamos que import.meta.env exista antes de leer .PROD
+  const isProd = (import.meta as any).env && (import.meta as any).env.PROD;
+  
+  if (isProd) {
     return ''; 
   }
+  
+  // 3. Desarrollo Local
   return 'http://localhost:5000';
 };
 
@@ -113,7 +117,7 @@ export const analyzeTravelVideo = async (source: File | string): Promise<TravelA
       
       // Enhance with Grounding (Client Side)
       if (analysisResult.placeName && analysisResult.estimatedLocation && apiKey) {
-         const ai = new GoogleGenAI({ apiKey });
+         const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
          const groundingQuery = `Find details and official website for "${analysisResult.placeName}" located in "${analysisResult.estimatedLocation}".`;
          const links = await getGroundingInfo(ai, groundingQuery);
          analysisResult.groundingLinks = links;
@@ -133,7 +137,7 @@ export const analyzeTravelVideo = async (source: File | string): Promise<TravelA
   // --- PATH 2: LOCAL FILE ANALYSIS (Via Client SDK) ---
   if (!apiKey) throw new Error("API Key faltante para análisis local.");
 
-  const ai = new GoogleGenAI({ apiKey });
+  const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
   const base64Data = await fileToGenerativePart(source);
 
   const schema: Schema = {
@@ -266,7 +270,7 @@ export const analyzeTravelVideo = async (source: File | string): Promise<TravelA
 export const generateSearchStrategy = async (userDescription: string): Promise<string[]> => {
   const apiKey = process.env.API_KEY;
   if (!apiKey) throw new Error("No API Key");
-  const ai = new GoogleGenAI({ apiKey });
+  const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
 
   const response = await ai.models.generateContent({
     model: 'gemini-3-pro-preview',
@@ -294,7 +298,7 @@ export const generateSearchStrategy = async (userDescription: string): Promise<s
 export const executeAutonomousStep = async (query: string): Promise<TravelAnalysis> => {
   const apiKey = process.env.API_KEY;
   if (!apiKey) throw new Error("No API Key");
-  const ai = new GoogleGenAI({ apiKey });
+  const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
 
   // Use Gemini 3 Pro with Search to find a result and analyze it immediately
   const response = await ai.models.generateContent({
