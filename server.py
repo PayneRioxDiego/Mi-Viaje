@@ -76,7 +76,9 @@ def analyze_with_gemini(video_path):
         raise Exception(f"Error subida Gemini: {e}")
 
     print("🤖 Analizando...")
-    model = genai.GenerativeModel(model_name="gemini-1.5-flash")
+    # Usamos el nombre técnico exacto para evitar el error 404
+# Sigue siendo el modelo 1.5 Flash (potente y rápido con video)
+model = genai.GenerativeModel(model_name="models/gemini-1.5-flash-001")
     
     prompt = """
     Analiza este video de viaje.
