@@ -19,19 +19,19 @@ const wait = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
 // --- CONFIGURATION ---
 const getBackendUrl = () => {
-  // 1. Prioridad: Variable inyectada por Vite (vite.config.ts)
+  // 1. Prioridad: Variable inyectada por Vite
   const envUrl = process.env.VITE_API_URL;
   if (envUrl) return envUrl.replace(/\/$/, "");
   
-  // 2. Producción: Si estamos servidos por Flask (mismo origen)
-  // Corregido: Verificamos que import.meta.env exista antes de leer .PROD
-  const isProd = (import.meta as any).env && (import.meta as any).env.PROD;
+  // 2. Producción: Detección segura a prueba de fallos
+  // Usamos optional chaining (?.) para que si 'env' no existe, devuelva undefined en lugar de crashear
+  const isProd = (import.meta as any).env?.PROD;
   
   if (isProd) {
     return ''; 
   }
   
-  // 3. Desarrollo Local
+  // 3. Desarrollo Local (Fallback)
   return 'http://localhost:5000';
 };
 
