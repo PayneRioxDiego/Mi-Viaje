@@ -13,16 +13,12 @@ from oauth2client.service_account import ServiceAccountCredentials
 
 # Load Environment Variables
 load_dotenv()
-API_KEY = os.getenv("API_KEY") # OJO: En Render asegúrate que la variable se llame API_KEY o GEMINI_API_KEY
+API_KEY = os.getenv("API_KEY") 
 
 # --- GOOGLE SHEETS SETUP ---
 SCOPES = ['https://www.googleapis.com/auth/spreadsheets', "https://www.googleapis.com/auth/drive"]
 
 def get_db_connection():
-    """
-    Intenta conectar a Google Sheets.
-    Si falla (no hay credenciales), devuelve None y usaremos memoria temporal.
-    """
     creds_json = os.getenv("GOOGLE_CREDENTIALS_JSON")
     sheet_id = os.getenv("GOOGLE_SHEET_ID")
     
@@ -50,11 +46,9 @@ except Exception as e:
     print(f"❌ Error configuring Gemini: {e}")
 
 # --- FLASK SETUP ---
-# Usamos 'dist' porque el Dockerfile ya se encarga de construir el React ahí
 app = Flask(__name__, static_folder='dist', static_url_path='')
 CORS(app)
 
-# In-memory fallback DB
 LOCAL_DB = []
 
 # --- HELPER FUNCTIONS ---
@@ -64,14 +58,13 @@ def download_video(url):
     timestamp = int(time.time())
     output_template = os.path.join(temp_dir, f'video_{timestamp}.%(ext)s')
 
-    # --- CONFIGURACIÓN OPTIMIZADA (MODO GUEPARDO) ---
+    # CONFIGURACIÓN OPTIMIZADA (MODO IPHONE)
     ydl_opts = {
         'format': 'worst[ext=mp4]', 
         'outtmpl': output_template,
         'quiet': True,
         'no_warnings': True,
         'nocheckcertificate': True,
-        # Disfraz de iPhone para velocidad máxima
         'user_agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 14_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/14.0 Mobile/15E148 Safari/604.1',
         'http_headers': {
             'Referer': 'https://www.tiktok.com/',
@@ -139,9 +132,17 @@ def analyze_with_gemini(video_path):
         pass
     
     raw_data = json.loads(response.text)
-    
+
+    # --- FIX LISTAS (AQUÍ ESTÁ LA MAGIA) ---
+    # Si Gemini nos da una lista [{...}], sacamos el diccionario de adentro.
+    if isinstance(raw_data, list):
+        print("⚠️ Gemini devolvió una lista, extrayendo primer elemento...")
+        if len(raw_data) > 0:
+            raw_data = raw_data[0]
+        else:
+            raw_data = {} # Lista vacía, prevenimos error
+
     # --- BLOQUE DE SEGURIDAD (SANITIZACIÓN) ---
-    # Esto evita el error "toLowerCase" rellenando los vacíos
     safe_data = {
         "category": raw_data.get("category") or "Otro",
         "placeName": raw_data.get("placeName") or "Lugar Desconocido",
@@ -163,6 +164,11 @@ def analyze_with_gemini(video_path):
 def analyze_video():
     print("🔔 Petición recibida en /analyze")
     data = request.json
+    
+    # FIX EXTRA: Si el frontend envía una lista por error, tomamos el primer item
+    if isinstance(data, list):
+        data = data[0]
+
     url = data.get('url')
 
     if not url:
