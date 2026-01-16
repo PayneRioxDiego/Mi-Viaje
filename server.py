@@ -133,16 +133,15 @@ def analyze_with_gemini(video_path):
     
     raw_data = json.loads(response.text)
 
-    # --- FIX LISTAS (AQUÍ ESTÁ LA MAGIA) ---
-    # Si Gemini nos da una lista [{...}], sacamos el diccionario de adentro.
+    # --- FIX LISTAS ---
     if isinstance(raw_data, list):
         print("⚠️ Gemini devolvió una lista, extrayendo primer elemento...")
         if len(raw_data) > 0:
             raw_data = raw_data[0]
         else:
-            raw_data = {} # Lista vacía, prevenimos error
+            raw_data = {} 
 
-    # --- BLOQUE DE SEGURIDAD (SANITIZACIÓN) ---
+    # --- BLOQUE DE SEGURIDAD (ANALISIS) ---
     safe_data = {
         "category": raw_data.get("category") or "Otro",
         "placeName": raw_data.get("placeName") or "Lugar Desconocido",
@@ -165,7 +164,6 @@ def analyze_video():
     print("🔔 Petición recibida en /analyze")
     data = request.json
     
-    # FIX EXTRA: Si el frontend envía una lista por error, tomamos el primer item
     if isinstance(data, list):
         data = data[0]
 
@@ -190,18 +188,43 @@ def analyze_video():
         if video_path and os.path.exists(video_path):
             os.remove(video_path)
 
+# --- AQUI ESTABA EL ERROR: HEMOS BLINDADO ESTA FUNCIÓN ---
 @app.route('/api/history', methods=['GET'])
 def get_history():
     sheet = get_db_connection()
+    raw_records = []
+    
+    # 1. Intentar leer de Sheets o memoria local
     if sheet:
         try:
-            records = sheet.get_all_records()
-            return jsonify(records)
+            raw_records = sheet.get_all_records()
         except Exception as e:
             print(f"Error leyendo Sheets: {e}")
-            return jsonify(LOCAL_DB)
+            raw_records = LOCAL_DB
     else:
-        return jsonify(LOCAL_DB)
+        raw_records = LOCAL_DB
+
+    # 2. LIMPIEZA TOTAL (Para evitar el error 'toLowerCase')
+    # Esto revisa fila por fila y rellena huecos vacíos
+    clean_records = []
+    for record in raw_records:
+        if not isinstance(record, dict): continue
+        
+        safe_record = {
+            "id": str(record.get("id") or ""),
+            "timestamp": record.get("timestamp") or 0,
+            "placeName": str(record.get("placeName") or "Desconocido"),
+            # 'category' es el que suele causar el crash, aseguramos que sea texto
+            "category": str(record.get("category") or "Otro"), 
+            "score": record.get("score") or 0,
+            "estimatedLocation": str(record.get("estimatedLocation") or ""),
+            "summary": str(record.get("summary") or ""),
+            "fileName": str(record.get("fileName") or ""),
+            "confidenceLevel": str(record.get("confidenceLevel") or "Bajo")
+        }
+        clean_records.append(safe_record)
+
+    return jsonify(clean_records)
 
 @app.route('/api/history', methods=['POST'])
 def save_history():
@@ -238,11 +261,4 @@ def health_check():
 @app.route('/', defaults={'path': ''})
 @app.route('/<path:path>')
 def serve(path):
-    if path != "" and os.path.exists(app.static_folder + '/' + path):
-        return send_from_directory(app.static_folder, path)
-    else:
-        return send_from_directory(app.static_folder, 'index.html')
-
-if __name__ == '__main__':
-    port = int(os.environ.get("PORT", 5000))
-    app.run(host='0.0.0.0', port=port)
+    if path != "" and os.path.exists(app.static
