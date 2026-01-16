@@ -18,11 +18,16 @@ const fileToGenerativePart = async (file: File): Promise<string> => {
 const wait = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
 // --- CONFIGURATION ---
-// Si estamos en Vercel, usará la variable de entorno. Si estamos en local, usará localhost.
 const getBackendUrl = () => {
   const envUrl = process.env.VITE_API_URL;
-  // Limpiar slash final si existe para evitar dobles slashes //
+  // Si existe variable de entorno, úsala.
   if (envUrl) return envUrl.replace(/\/$/, "");
+  
+  // Si estamos en producción (servidos desde Flask), usar URL relativa vacía para llamar al mismo dominio
+  // Si estamos en local (Vite dev server), usar localhost:5000
+  if ((import.meta as any).env.PROD) { 
+    return ''; 
+  }
   return 'http://localhost:5000';
 };
 
@@ -119,7 +124,7 @@ export const analyzeTravelVideo = async (source: File | string): Promise<TravelA
     } catch (error: any) {
       console.error("❌ Error de Backend:", error);
       if (error.message.includes("Failed to fetch")) {
-        throw new Error(`No se pudo conectar con el servidor Backend (${BACKEND_URL}). ¿Está encendido?`);
+        throw new Error(`No se pudo conectar con el servidor Backend. ¿Está encendido?`);
       }
       throw error;
     }

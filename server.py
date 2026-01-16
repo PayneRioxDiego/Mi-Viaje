@@ -3,7 +3,7 @@ import time
 import json
 import glob
 import tempfile
-from flask import Flask, request, jsonify
+from flask import Flask, request, jsonify, send_from_directory
 from flask_cors import CORS
 import yt_dlp
 import google.generativeai as genai
@@ -22,9 +22,10 @@ try:
 except Exception as e:
     print(f"❌ Error configuring Gemini: {e}")
 
-app = Flask(__name__)
-# Enable CORS for All Origins explicitly to avoid localhost blocking
-CORS(app, resources={r"/*": {"origins": "*"}})
+# Configurar Flask para servir la carpeta 'dist' (donde está React compilado)
+# static_folder='dist' indica dónde están los archivos construidos
+app = Flask(__name__, static_folder='dist', static_url_path='')
+CORS(app)
 
 def download_video(url):
     """Downloads video using yt-dlp to a temporary file."""
@@ -34,18 +35,16 @@ def download_video(url):
     output_template = os.path.join(temp_dir, f'video_{timestamp}.%(ext)s')
 
     ydl_opts = {
-        'format': 'worst[ext=mp4]', # Low quality is fine for AI analysis, faster download
+        'format': 'worst[ext=mp4]', 
         'outtmpl': output_template,
         'quiet': True,
         'no_warnings': True,
-        # 'cookiesfrombrowser': ('chrome',), # Uncomment if TikTok blocks downloads (requires chrome open)
     }
 
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             ydl.download([url])
         
-        # Find the downloaded file
         files = glob.glob(os.path.join(temp_dir, 'video_*'))
         if files:
             print(f"✅ Video descargado en: {files[0]}")
@@ -59,13 +58,11 @@ def analyze_with_gemini(video_path):
     """Uploads video to Gemini and analyzes it."""
     print(f"📤 Subiendo {video_path} a Gemini...")
     
-    # 1. Upload File
     try:
         video_file = genai.upload_file(path=video_path)
     except Exception as e:
         raise Exception(f"Fallo al subir a Gemini: {e}")
     
-    # 2. Wait for processing
     print("⏳ Esperando procesamiento de video en la nube...")
     while video_file.state.name == "PROCESSING":
         time.sleep(2)
@@ -76,8 +73,6 @@ def analyze_with_gemini(video_path):
 
     print("🤖 Video listo. Generando análisis con IA...")
 
-    # 3. Generate Content
-    # Updated to use gemini-2.5-flash for better video performance
     model = genai.GenerativeModel(model_name="gemini-2.5-flash")
     
     prompt = """
@@ -104,13 +99,14 @@ def analyze_with_gemini(video_path):
         }
     )
 
-    # Cleanup: Delete file from Gemini Cloud to save storage
     try:
         genai.delete_file(video_file.name)
     except:
         pass
     
     return json.loads(response.text)
+
+# --- RUTAS DE API ---
 
 @app.route('/analyze', methods=['POST'])
 def analyze_video():
@@ -128,32 +124,34 @@ def analyze_video():
         # 1. Download
         video_path = download_video(url)
         if not video_path:
-            return jsonify({"error": "Fallo al descargar el video. TikTok podría estar bloqueando la IP."}), 500
+            return jsonify({"error": "Fallo al descargar el video."}), 500
 
         # 2. Analyze
         analysis_result = analyze_with_gemini(video_path)
-        
         return jsonify(analysis_result)
 
     except Exception as e:
         print(f"❌ Error en servidor: {e}")
         return jsonify({"error": str(e)}), 500
     finally:
-        # 3. Cleanup Local File
         if video_path and os.path.exists(video_path):
             os.remove(video_path)
-            # Try to remove temp dir
-            try:
-                os.rmdir(os.path.dirname(video_path))
-            except:
-                pass
 
-@app.route('/', methods=['GET'])
+@app.route('/health', methods=['GET'])
 def health_check():
     return "Backend operativo", 200
 
+# --- SIRVIENDO REACT ---
+# Esta ruta captura cualquier URL que no sea API y devuelve el index.html
+@app.route('/', defaults={'path': ''})
+@app.route('/<path:path>')
+def serve(path):
+    if path != "" and os.path.exists(app.static_folder + '/' + path):
+        return send_from_directory(app.static_folder, path)
+    else:
+        return send_from_directory(app.static_folder, 'index.html')
+
 if __name__ == '__main__':
     port = int(os.environ.get("PORT", 5000))
-    print(f"🚀 COCINA (Servidor) LISTA en puerto {port}")
-    print(f"   Esperando pedidos del Camarero (Frontend)...")
+    print(f"🚀 Servidor Todo-en-Uno LISTO en puerto {port}")
     app.run(host='0.0.0.0', port=port)
