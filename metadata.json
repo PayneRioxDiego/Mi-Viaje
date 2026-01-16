@@ -1,0 +1,5 @@
+{
+  "name": "Nuestro Viaje",
+  "description": "Herramienta inteligente de análisis de videos de viajes impulsada por Gemini. Sube clips de viajes para extraer detalles de ubicación, costos y resúmenes al instante.",
+  "requestFramePermissions": []
+}
