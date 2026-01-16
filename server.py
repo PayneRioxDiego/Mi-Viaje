@@ -3,7 +3,8 @@ import time
 import json
 import glob
 import tempfile
-from flask import Flask, request, jsonify, send_from_directory
+# AÑADIDO: render_template para conectar con el HTML
+from flask import Flask, request, jsonify, render_template
 from flask_cors import CORS
 import yt_dlp
 import google.generativeai as genai
@@ -11,7 +12,7 @@ from dotenv import load_dotenv
 
 # Load API Key
 load_dotenv()
-API_KEY = os.getenv("API_KEY")
+API_KEY = os.getenv("GEMINI_API_KEY") 
 
 if not API_KEY:
     print("❌ ERROR: API_KEY not found in environment variables.")
@@ -22,9 +23,10 @@ try:
 except Exception as e:
     print(f"❌ Error configuring Gemini: {e}")
 
-# Configurar Flask para servir la carpeta 'dist' (donde está React compilado)
-# static_folder='dist' indica dónde están los archivos construidos
-app = Flask(__name__, static_folder='dist', static_url_path='')
+# --- CAMBIO REALIZADO: FIX DEL DIST ---
+# Quitamos lo de 'dist' para que no busque carpetas de React que no existen.
+# Al dejarlo así, Flask buscará automáticamente en la carpeta 'templates'.
+app = Flask(__name__)
 CORS(app)
 
 def download_video(url):
@@ -73,6 +75,7 @@ def analyze_with_gemini(video_path):
 
     print("🤖 Video listo. Generando análisis con IA...")
 
+    # --- MODELO TAL CUAL LO PEDISTE (2.5) ---
     model = genai.GenerativeModel(model_name="gemini-2.5-flash")
     
     prompt = """
@@ -141,15 +144,12 @@ def analyze_video():
 def health_check():
     return "Backend operativo", 200
 
-# --- SIRVIENDO REACT ---
-# Esta ruta captura cualquier URL que no sea API y devuelve el index.html
-@app.route('/', defaults={'path': ''})
-@app.route('/<path:path>')
-def serve(path):
-    if path != "" and os.path.exists(app.static_folder + '/' + path):
-        return send_from_directory(app.static_folder, path)
-    else:
-        return send_from_directory(app.static_folder, 'index.html')
+# --- RUTA PRINCIPAL CORREGIDA ---
+# Esta ruta ahora carga el archivo index.html desde la carpeta 'templates'
+# en lugar de intentar servir una carpeta 'dist' que no existe.
+@app.route('/')
+def home():
+    return render_template('index.html')
 
 if __name__ == '__main__':
     port = int(os.environ.get("PORT", 5000))
