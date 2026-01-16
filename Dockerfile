@@ -1,5 +1,4 @@
-# --- ETAPA 1: Construcción (Node.js) ---
-# CAMBIO 1: Subimos a Node 20 (versión más compatible con Vite nuevo)
+# --- ETAPA 1: Construcción del Frontend (Node.js) ---
 FROM node:20 as build-step
 
 WORKDIR /app
@@ -7,15 +6,11 @@ WORKDIR /app
 # Copiamos solo el package.json primero
 COPY package.json ./
 
-# CAMBIO 2: Estrategia de "Tierra Quemada"
-# Borramos el package-lock.json si existe para evitar conflictos de versiones
-# Limpiamos la caché de npm antes de empezar
+# Limpieza y preparación de entorno Node
+# Borramos el package-lock.json si existe para evitar conflictos
 RUN rm -rf package-lock.json && npm cache clean --force
 
-# CAMBIO 3: Instalación robusta
-# install: instala dependencias
-# --legacy-peer-deps: ignora conflictos de pares
-# --no-audit: no pierde tiempo buscando vulnerabilidades
+# Instalación robusta (ignora versiones viejas y auditorías)
 RUN npm install --legacy-peer-deps --no-audit
 
 # Copiamos el resto del código
@@ -25,10 +20,11 @@ COPY . .
 RUN npm run build
 
 
-# --- ETAPA 2: Servidor (Python) ---
-FROM python:3.9-slim
+# --- ETAPA 2: Servidor (Python ACTUALIZADO) ---
+# CAMBIO IMPORTANTE: Usamos Python 3.10 para compatibilidad con Google Gemini
+FROM python:3.10-slim
 
-# Instalamos ffmpeg
+# Instalamos ffmpeg (necesario para yt-dlp)
 RUN apt-get update && \
     apt-get install -y ffmpeg && \
     apt-get clean
@@ -45,7 +41,7 @@ COPY --from=build-step /app/dist ./dist
 # Copiamos el código del backend
 COPY . .
 
-# Variables de entorno para que Flask sepa que está en producción
+# Variables de entorno
 ENV FLASK_ENV=production
 ENV PORT=5000
 
