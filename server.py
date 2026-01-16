@@ -66,8 +66,8 @@ def analyze_with_gemini(video_path):
         raise Exception("Video processing failed.")
 
     # 3. Generate Content
-    # We use gemini-1.5-flash for speed and video capabilities
-    model = genai.GenerativeModel(model_name="gemini-1.5-flash")
+    # Updated to use gemini-2.5-flash for better video performance
+    model = genai.GenerativeModel(model_name="gemini-2.5-flash")
     
     prompt = """
     Actúa como un crítico de viajes escéptico y profesional. Analiza el video buscando inconsistencias.
