@@ -13,7 +13,7 @@ from oauth2client.service_account import ServiceAccountCredentials
 
 # Load Environment Variables
 load_dotenv()
-API_KEY = os.getenv("API_KEY")
+API_KEY = os.getenv("API_KEY") # OJO: En Render asegúrate que la variable se llame API_KEY o GEMINI_API_KEY
 
 # --- GOOGLE SHEETS SETUP ---
 SCOPES = ['https://www.googleapis.com/auth/spreadsheets', "https://www.googleapis.com/auth/drive"]
@@ -27,11 +27,10 @@ def get_db_connection():
     sheet_id = os.getenv("GOOGLE_SHEET_ID")
     
     if not creds_json or not sheet_id:
-        print("⚠️ Google Sheets no configurado (Falta GOOGLE_CREDENTIALS_JSON o GOOGLE_SHEET_ID). Usando memoria local.")
+        print("⚠️ Google Sheets no configurado. Usando memoria local.")
         return None
 
     try:
-        # Parsear el JSON de credenciales desde la variable de entorno
         creds_dict = json.loads(creds_json)
         creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, SCOPES)
         client = gspread.authorize(creds)
@@ -51,10 +50,11 @@ except Exception as e:
     print(f"❌ Error configuring Gemini: {e}")
 
 # --- FLASK SETUP ---
+# Usamos 'dist' porque el Dockerfile ya se encarga de construir el React ahí
 app = Flask(__name__, static_folder='dist', static_url_path='')
 CORS(app)
 
-# In-memory fallback DB (si no hay Google Sheets)
+# In-memory fallback DB
 LOCAL_DB = []
 
 # --- HELPER FUNCTIONS ---
@@ -64,11 +64,20 @@ def download_video(url):
     timestamp = int(time.time())
     output_template = os.path.join(temp_dir, f'video_{timestamp}.%(ext)s')
 
+    # --- CONFIGURACIÓN OPTIMIZADA (MODO GUEPARDO) ---
     ydl_opts = {
         'format': 'worst[ext=mp4]', 
         'outtmpl': output_template,
         'quiet': True,
         'no_warnings': True,
+        'nocheckcertificate': True,
+        # Disfraz de iPhone para velocidad máxima
+        'user_agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 14_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/14.0 Mobile/15E148 Safari/604.1',
+        'http_headers': {
+            'Referer': 'https://www.tiktok.com/',
+            'Accept-Language': 'en-US,en;q=0.9',
+        },
+        'source_address': '0.0.0.0', 
     }
 
     try:
@@ -129,25 +138,23 @@ def analyze_with_gemini(video_path):
     except:
         pass
     
-    # ... código anterior ...
-    
     raw_data = json.loads(response.text)
     
     # --- BLOQUE DE SEGURIDAD (SANITIZACIÓN) ---
     # Esto evita el error "toLowerCase" rellenando los vacíos
     safe_data = {
-        "category": raw_data.get("category") or "Otro",  # Si es null, pone "Otro"
+        "category": raw_data.get("category") or "Otro",
         "placeName": raw_data.get("placeName") or "Lugar Desconocido",
         "estimatedLocation": raw_data.get("estimatedLocation") or "Ubicación no encontrada",
         "priceRange": raw_data.get("priceRange") or "Precio desconocido",
         "summary": raw_data.get("summary") or "No se pudo generar resumen.",
         "score": raw_data.get("score") or 0,
-        "confidenceLevel": raw_data.get("confidenceLevel") or "Bajo", # Importante para colores
+        "confidenceLevel": raw_data.get("confidenceLevel") or "Bajo",
         "criticalVerdict": raw_data.get("criticalVerdict") or "Sin veredicto",
         "isTouristTrap": raw_data.get("isTouristTrap") if raw_data.get("isTouristTrap") is not None else False
     }
 
-    print("✅ Datos enviados al frontend:", safe_data) # Para ver en los logs
+    print("✅ Datos enviados al frontend:", safe_data)
     return safe_data
 
 # --- API ROUTES ---
@@ -179,12 +186,10 @@ def analyze_video():
 
 @app.route('/api/history', methods=['GET'])
 def get_history():
-    """Obtiene el historial desde Google Sheets o Memoria Local"""
     sheet = get_db_connection()
     if sheet:
         try:
             records = sheet.get_all_records()
-            # Ordenar por timestamp descendente (si existe)
             return jsonify(records)
         except Exception as e:
             print(f"Error leyendo Sheets: {e}")
@@ -194,13 +199,11 @@ def get_history():
 
 @app.route('/api/history', methods=['POST'])
 def save_history():
-    """Guarda un nuevo registro"""
     data = request.json
     sheet = get_db_connection()
     
     if sheet:
         try:
-            # Flatten data values for the sheet row
             row = [
                 data.get('id'),
                 data.get('timestamp'),
@@ -209,7 +212,7 @@ def save_history():
                 data.get('score'),
                 data.get('estimatedLocation'),
                 data.get('summary'),
-                data.get('fileName') # URL or identifier
+                data.get('fileName')
             ]
             sheet.append_row(row)
             return jsonify({"status": "saved to cloud", "data": data})
@@ -225,7 +228,7 @@ def save_history():
 def health_check():
     return "Backend operativo", 200
 
-# --- STATIC FILES (Catch-All MUST be last) ---
+# --- STATIC FILES ---
 @app.route('/', defaults={'path': ''})
 @app.route('/<path:path>')
 def serve(path):
