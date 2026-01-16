@@ -1,52 +1,41 @@
-# --- ETAPA 1: Construcción del Frontend (Node.js) ---
+# --- ETAPA 1: Construcción del Frontend ---
 FROM node:20 as build-step
 
 WORKDIR /app
-
-# Copiamos solo el package.json primero
 COPY package.json ./
 
-# Limpieza y preparación de entorno Node
-# Borramos el package-lock.json si existe para evitar conflictos
+# Limpieza y preparación
 RUN rm -rf package-lock.json && npm cache clean --force
-
-# Instalación robusta (ignora versiones viejas y auditorías)
 RUN npm install --legacy-peer-deps --no-audit
 
-# Copiamos el resto del código
 COPY . .
-
-# Construimos la app (React -> carpeta dist)
 RUN npm run build
 
+# --- ETAPA 2: Servidor (Python 3.11) ---
+# CAMBIO: Usamos 3.11 para estar al día y evitar warnings
+FROM python:3.11-slim
 
-# --- ETAPA 2: Servidor (Python ACTUALIZADO) ---
-# CAMBIO IMPORTANTE: Usamos Python 3.10 para compatibilidad con Google Gemini
-FROM python:3.10-slim
-
-# Instalamos ffmpeg (necesario para yt-dlp)
+# Instalamos ffmpeg
 RUN apt-get update && \
     apt-get install -y ffmpeg && \
     apt-get clean
 
 WORKDIR /app
 
-# Copiamos requerimientos e instalamos
+# Instalamos dependencias (ahora con versiones fijas del requirements.txt)
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copiamos la carpeta 'dist' construida en la Etapa 1
+# Copiamos todo lo demás
 COPY --from=build-step /app/dist ./dist
-
-# Copiamos el código del backend
 COPY . .
 
-# Variables de entorno
+# Variables
 ENV FLASK_ENV=production
 ENV PORT=5000
 
-# Exponemos el puerto
 EXPOSE 5000
 
-# Arrancamos
-CMD ["python", "server.py"]
+# CAMBIO FINAL: Usamos Gunicorn en lugar de python directo
+# Esto es mucho más robusto para producción y evita el "Exited Early"
+CMD ["gunicorn", "--bind", "0.0.0.0:5000", "server:app"]
