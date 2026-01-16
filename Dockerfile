@@ -1,29 +1,47 @@
-# 1. Usamos una imagen base de Python ligera (Linux)
-FROM python:3.10-slim
+# --- ETAPA 1: Construir el Frontend (La parte bonita) ---
+# Usamos Node.js para "cocinar" (compilar) tu código React
+FROM node:18 as build-step
 
-# 2. INSTALACIÓN CRÍTICA: ffmpeg
-# yt-dlp NECESITA ffmpeg para unir el video y el audio de TikTok correctamente.
-# Sin esto, la descarga fallará o bajará videos mudos.
-RUN apt-get update && \
-    apt-get install -y ffmpeg git && \
-    apt-get clean
-
-# 3. Preparamos la carpeta de trabajo dentro del contenedor
 WORKDIR /app
 
-# 4. Copiamos primero los requerimientos (para aprovechar la caché de Docker)
-COPY requirements.txt .
+# Copiamos los archivos de configuración de Node
+COPY package*.json ./
 
-# 5. Instalamos las librerías de Python
-RUN pip install --no-cache-dir -r requirements.txt
+# Instalamos las dependencias de React (esto reemplaza a "npm install")
+RUN npm install
 
-# 6. Copiamos el resto del código de tu app (app.py, etc.)
+# Copiamos todo el código fuente del frontend
 COPY . .
 
-# 7. Exponemos el puerto (Flask suele usar el 5000 o el 8080)
-EXPOSE 8080
+# Construimos la carpeta 'dist' (esto reemplaza a "npm run build")
+RUN npm run build
 
-# 8. El comando que arranca tu servidor
-# Asegúrate de que tu archivo principal de Python se llame app.py o main.py
-# Si se llama main.py, cambia "app.py" por "main.py" abajo.
+
+# --- ETAPA 2: Configurar el Backend (Python + Motor) ---
+# Ahora usamos Python, igual que antes
+FROM python:3.9-slim
+
+# Instalamos ffmpeg (necesario para yt-dlp)
+RUN apt-get update && \
+    apt-get install -y ffmpeg && \
+    apt-get clean
+
+WORKDIR /app
+
+# Copiamos los requerimientos de Python
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+# --- AQUÍ ESTÁ EL TRUCO ---
+# Copiamos la carpeta 'dist' que creamos en la Etapa 1
+# y la pegamos dentro de la imagen de Python
+COPY --from=build-step /app/dist ./dist
+
+# Copiamos el resto del código (server.py, etc.)
+COPY . .
+
+# Exponemos el puerto
+EXPOSE 5000
+
+# Arrancamos el servidor (asegúrate que tu archivo se llame server.py)
 CMD ["python", "server.py"]
