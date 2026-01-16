@@ -19,22 +19,25 @@ const wait = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
 // --- CONFIGURATION ---
 const getBackendUrl = () => {
-  // 1. Prioridad: Variable inyectada por Vite
+  // 1. Detección de Producción segura
+  try {
+    // Usamos ?. (optional chaining) para evitar el crash si import.meta o env son undefined
+    // @ts-ignore
+    if (import.meta?.env?.PROD) {
+      // Si estamos en producción, el frontend es servido por el mismo servidor Flask.
+      // Devolvemos una cadena vacía para que fetch use rutas relativas (ej: "/analyze")
+      return ''; 
+    }
+  } catch (e) {
+    // Si falla el acceso a import.meta, ignoramos silenciosamente y seguimos al fallback
+  }
+
+  // 2. Variable explícita de entorno (si existe)
+  // Nota: process.env.VITE_API_URL es reemplazado por vite.config.ts durante el build
   const envUrl = process.env.VITE_API_URL;
   if (envUrl) return envUrl.replace(/\/$/, "");
   
-  // 2. Producción: Detección segura a prueba de fallos
-  // Usamos casting a 'any' para acceder a import.meta de forma segura sin conflictos de TS
-  const meta = import.meta as any;
-  const isProd = meta.env && meta.env.PROD;
-  
-  if (isProd) {
-    // En producción (dentro del Docker), el backend sirve el frontend.
-    // Devolvemos cadena vacía para usar rutas relativas (ej: /analyze)
-    return ''; 
-  }
-  
-  // 3. Desarrollo Local (Fallback)
+  // 3. Desarrollo Local (Fallback por defecto para desarrollo separado)
   return 'http://localhost:5000';
 };
 
@@ -101,8 +104,9 @@ export const analyzeTravelVideo = async (source: File | string): Promise<TravelA
   if (typeof source === 'string') {
     try {
       // Construimos la URL del endpoint
+      // Si BACKEND_URL es '', el resultado es '/analyze' (ruta relativa)
       const endpoint = `${BACKEND_URL}/analyze`;
-      console.log(`📡 Conectando al Backend en: ${endpoint || '(Ruta relativa)'}`);
+      console.log(`📡 Conectando al Backend en: ${endpoint}`);
       console.log(`📝 Procesando URL: ${source}`);
       
       const response = await fetch(endpoint, {
@@ -132,8 +136,8 @@ export const analyzeTravelVideo = async (source: File | string): Promise<TravelA
 
     } catch (error: any) {
       console.error("❌ Error de Backend:", error);
-      if (error.message.includes("Failed to fetch")) {
-        throw new Error(`No se pudo conectar con el servidor Backend. ¿Está encendido?`);
+      if (error.message.includes("Failed to fetch") || error.message.includes("NetworkError")) {
+        throw new Error(`No se pudo conectar con el servidor Backend. Si estás en local, verifica que server.py esté corriendo en el puerto 5000.`);
       }
       throw error;
     }

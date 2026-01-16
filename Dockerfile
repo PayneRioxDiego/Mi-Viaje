@@ -26,4 +26,4 @@ EXPOSE 8080
 # 8. El comando que arranca tu servidor
 # Asegúrate de que tu archivo principal de Python se llame app.py o main.py
 # Si se llama main.py, cambia "app.py" por "main.py" abajo.
-CMD ["python", "app.py"]
+CMD ["python", "server.py"]
