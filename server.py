@@ -3,7 +3,7 @@ import time
 import json
 import glob
 import tempfile
-import uuid  # <--- IMPORTANTE: Necesario para generar IDs únicos
+import uuid
 from flask import Flask, request, jsonify, send_from_directory
 from flask_cors import CORS
 import yt_dlp
@@ -73,139 +73,25 @@ def analyze_with_gemini(video_path):
             time.sleep(1)
             video_file = genai.get_file(video_file.name)
     except Exception as e:
-        raise Exception(f"Error Gemini: {e}")
+        raise Exception(f"Error subida Gemini: {e}")
 
     print("🤖 Analizando...")
-    model = genai.GenerativeModel(model_name="gemini-2.5-flash")
+    # Usamos 1.5 Flash que es muy estable
+    model = genai.GenerativeModel(model_name="gemini-1.5-flash")
+    
     prompt = """
-    Analiza este video de viaje. Devuelve JSON estricto:
+    Analiza este video de viaje.
+    Responde ÚNICAMENTE con un JSON válido. No uses bloques de código markdown.
+    Usa estas claves exactas:
     {
       "category": "Lugar/Comida/Otro",
-      "placeName": "Nombre del lugar",
+      "placeName": "Nombre del lugar o ciudad",
       "estimatedLocation": "Ciudad, País",
-      "priceRange": "Precio",
-      "summary": "Resumen corto",
-      "score": 0,
+      "priceRange": "Precio estimado",
+      "summary": "Resumen corto y atractivo",
+      "score": 5,
       "confidenceLevel": "Alto",
-      "criticalVerdict": "Opinion escéptica",
+      "criticalVerdict": "Opinión honesta",
       "isTouristTrap": false
     }
     """
-    response = model.generate_content([video_file, prompt], generation_config={"response_mime_type": "application/json"})
-    try: genai.delete_file(video_file.name)
-    except: pass
-    
-    # Procesar respuesta
-    raw_data = json.loads(response.text)
-    if isinstance(raw_data, list): raw_data = raw_data[0] if len(raw_data) > 0 else {}
-
-    # Generamos ID y Timestamp AQUÍ para que el Frontend ya los tenga listos para guardar
-    current_time = int(time.time() * 1000)
-    unique_id = str(uuid.uuid4())
-
-    safe_data = {
-        "id": unique_id, # <--- Nuevo
-        "timestamp": current_time, # <--- Nuevo
-        "category": str(raw_data.get("category") or "Otro"),
-        "placeName": str(raw_data.get("placeName") or "Lugar Desconocido"),
-        "estimatedLocation": str(raw_data.get("estimatedLocation") or "Ubicación no encontrada"),
-        "priceRange": str(raw_data.get("priceRange") or "??"),
-        "summary": str(raw_data.get("summary") or "Sin resumen disponible"),
-        "score": raw_data.get("score") or 0,
-        "confidenceLevel": str(raw_data.get("confidenceLevel") or "Bajo"),
-        "criticalVerdict": str(raw_data.get("criticalVerdict") or "Sin veredicto"),
-        "isTouristTrap": bool(raw_data.get("isTouristTrap")),
-        "fileName": "Video TikTok"
-    }
-    return safe_data
-
-# --- RUTAS ---
-@app.route('/analyze', methods=['POST'])
-def analyze_video():
-    data = request.json
-    if isinstance(data, list): data = data[0]
-    
-    url = data.get('url')
-    if not url: return jsonify({"error": "No URL"}), 400
-
-    video_path = download_video(url)
-    if not video_path: return jsonify({"error": "Error descarga"}), 500
-
-    try:
-        result = analyze_with_gemini(video_path)
-        return jsonify(result)
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-    finally:
-        if video_path and os.path.exists(video_path): os.remove(video_path)
-
-@app.route('/api/history', methods=['GET'])
-def get_history():
-    sheet = get_db_connection()
-    raw_records = []
-    if sheet:
-        try: raw_records = sheet.get_all_records()
-        except: raw_records = LOCAL_DB
-    else: raw_records = LOCAL_DB
-
-    clean_records = []
-    for record in raw_records:
-        if not isinstance(record, dict): continue
-        safe_record = {
-            "id": str(record.get("id") or ""),
-            "timestamp": record.get("timestamp") or 0,
-            "placeName": str(record.get("placeName") or "Desconocido"),
-            "category": str(record.get("category") or "Otro"), 
-            "score": record.get("score") or 0,
-            "estimatedLocation": str(record.get("estimatedLocation") or ""),
-            "summary": str(record.get("summary") or ""),
-            "fileName": str(record.get("fileName") or ""),
-            "confidenceLevel": str(record.get("confidenceLevel") or "Bajo"),
-            "criticalVerdict": str(record.get("criticalVerdict") or "")
-        }
-        clean_records.append(safe_record)
-    return jsonify(clean_records)
-
-@app.route('/api/history', methods=['POST'])
-def save_history():
-    data = request.json
-    print(f"💾 INTENTANDO GUARDAR: {data}") # <--- DEBUG IMPORTANTE
-
-    sheet = get_db_connection()
-    if sheet:
-        try:
-            # Orden estricto de columnas A->H
-            row = [
-                data.get('id'),
-                data.get('timestamp'),
-                data.get('placeName'),
-                data.get('category'),
-                data.get('score'),
-                data.get('estimatedLocation'),
-                data.get('summary'),
-                data.get('fileName')
-            ]
-            sheet.append_row(row)
-            print("✅ Guardado en Sheets con éxito")
-            return jsonify({"status": "saved"})
-        except Exception as e:
-            print(f"❌ Error guardando Sheets: {e}")
-            LOCAL_DB.append(data)
-            return jsonify({"status": "fallback"})
-    else:
-        LOCAL_DB.append(data)
-        return jsonify({"status": "local"})
-
-@app.route('/health', methods=['GET'])
-def health_check(): return "OK", 200
-
-@app.route('/', defaults={'path': ''})
-@app.route('/<path:path>')
-def serve(path):
-    if path != "" and os.path.exists(app.static_folder + '/' + path):
-        return send_from_directory(app.static_folder, path)
-    return send_from_directory(app.static_folder, 'index.html')
-
-if __name__ == '__main__':
-    port = int(os.environ.get("PORT", 5000))
-    app.run(host='0.0.0.0', port=port)
