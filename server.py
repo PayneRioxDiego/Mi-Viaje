@@ -76,9 +76,10 @@ def analyze_with_gemini(video_path):
         raise Exception(f"Error subida Gemini: {e}")
 
     print("🤖 Analizando...")
-    # Usamos el nombre técnico exacto para evitar el error 404
-# Sigue siendo el modelo 1.5 Flash (potente y rápido con video)
-model = genai.GenerativeModel(model_name="models/gemini-1.5-flash-001")
+    
+    # --- AQUÍ ESTABA EL ERROR ---
+    # Usamos el nombre técnico exacto y alineado correctamente
+    model = genai.GenerativeModel(model_name="gemini-1.5-flash-001")
     
     prompt = """
     Analiza este video de viaje.
@@ -216,23 +217,6 @@ def serve(path):
     if path != "" and os.path.exists(app.static_folder + '/' + path):
         return send_from_directory(app.static_folder, path)
     return send_from_directory(app.static_folder, 'index.html')
-
-# --- DEBUGGING DE ARCHIVOS (LA LINTERNA) ---
-print("\n🕵️‍♂️ --- INSPECCIÓN DE ARCHIVOS ESTÁTICOS ---")
-try:
-    if os.path.exists(app.static_folder):
-        print(f"✅ La carpeta '{app.static_folder}' EXISTE.")
-        files = os.listdir(app.static_folder)
-        print(f"📄 Contenido: {files}")
-        if 'index.html' in files:
-            print("🎉 ¡index.html ENCONTRADO!")
-        else:
-            print("⚠️ index.html NO ESTÁ. Vite falló al construir.")
-    else:
-        print(f"❌ La carpeta '{app.static_folder}' NO EXISTE.")
-except Exception as e:
-    print(f"💥 Error inspeccionando: {e}")
-print("--------------------------------------------\n")
 
 if __name__ == '__main__':
     port = int(os.environ.get("PORT", 5000))
