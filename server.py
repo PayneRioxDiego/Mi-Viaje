@@ -21,7 +21,7 @@ if not API_KEY: print("❌ ERROR: API_KEY not found.")
 try: genai.configure(api_key=API_KEY)
 except Exception as e: print(f"❌ Error Gemini: {e}")
 
-# Flask
+# Flask (Aseguramos que busque en 'dist')
 app = Flask(__name__, static_folder='dist', static_url_path='')
 CORS(app)
 
@@ -76,7 +76,6 @@ def analyze_with_gemini(video_path):
         raise Exception(f"Error subida Gemini: {e}")
 
     print("🤖 Analizando...")
-    # Usamos 1.5 Flash que es muy estable
     model = genai.GenerativeModel(model_name="gemini-1.5-flash")
     
     prompt = """
@@ -95,3 +94,144 @@ def analyze_with_gemini(video_path):
       "isTouristTrap": false
     }
     """
+    
+    response = model.generate_content([video_file, prompt], generation_config={"response_mime_type": "application/json"})
+    
+    # Limpieza y Parseo
+    clean_text = response.text.replace("```json", "").replace("```", "").strip()
+    try:
+        raw_data = json.loads(clean_text)
+    except:
+        raw_data = {}
+
+    if isinstance(raw_data, list): raw_data = raw_data[0] if len(raw_data) > 0 else {}
+    
+    # Eliminar video de la nube
+    try: genai.delete_file(video_file.name)
+    except: pass
+
+    # Generamos ID y Timestamp
+    current_time = int(time.time() * 1000)
+    unique_id = str(uuid.uuid4())
+
+    safe_data = {
+        "id": unique_id,
+        "timestamp": current_time,
+        "category": str(raw_data.get("category") or "Otro"),
+        "placeName": str(raw_data.get("placeName") or "Lugar Desconocido"),
+        "estimatedLocation": str(raw_data.get("estimatedLocation") or "Ubicación no encontrada"),
+        "priceRange": str(raw_data.get("priceRange") or "??"),
+        "summary": str(raw_data.get("summary") or "Sin resumen disponible"),
+        "score": raw_data.get("score") or 0,
+        "confidenceLevel": str(raw_data.get("confidenceLevel") or "Bajo"),
+        "criticalVerdict": str(raw_data.get("criticalVerdict") or "Sin veredicto"),
+        "isTouristTrap": bool(raw_data.get("isTouristTrap")),
+        "fileName": "Video TikTok"
+    }
+    return safe_data
+
+# --- RUTAS ---
+@app.route('/analyze', methods=['POST'])
+def analyze_video():
+    try:
+        data = request.json
+        if isinstance(data, list): data = data[0]
+        url = data.get('url')
+        if not url: return jsonify({"error": "No URL"}), 400
+
+        video_path = download_video(url)
+        if not video_path: return jsonify({"error": "Error descarga"}), 500
+
+        result = analyze_with_gemini(video_path)
+        return jsonify(result)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+    finally:
+        try:
+            if 'video_path' in locals() and video_path and os.path.exists(video_path):
+                os.remove(video_path)
+        except: pass
+
+@app.route('/api/history', methods=['GET'])
+def get_history():
+    sheet = get_db_connection()
+    raw_records = []
+    if sheet:
+        try: raw_records = sheet.get_all_records()
+        except: raw_records = LOCAL_DB
+    else: raw_records = LOCAL_DB
+
+    clean_records = []
+    for record in raw_records:
+        if not isinstance(record, dict): continue
+        safe_record = {
+            "id": str(record.get("id") or ""),
+            "timestamp": record.get("timestamp") or 0,
+            "placeName": str(record.get("placeName") or "Desconocido"),
+            "category": str(record.get("category") or "Otro"), 
+            "score": record.get("score") or 0,
+            "estimatedLocation": str(record.get("estimatedLocation") or ""),
+            "summary": str(record.get("summary") or ""),
+            "fileName": str(record.get("fileName") or ""),
+            "confidenceLevel": str(record.get("confidenceLevel") or "Bajo"),
+            "criticalVerdict": str(record.get("criticalVerdict") or "")
+        }
+        clean_records.append(safe_record)
+    return jsonify(clean_records)
+
+@app.route('/api/history', methods=['POST'])
+def save_history():
+    data = request.json
+    sheet = get_db_connection()
+    if sheet:
+        try:
+            row = [
+                data.get('id'),
+                data.get('timestamp'),
+                data.get('placeName'),
+                data.get('category'),
+                data.get('score'),
+                data.get('estimatedLocation'),
+                data.get('summary'),
+                data.get('fileName')
+            ]
+            sheet.append_row(row)
+            return jsonify({"status": "saved"})
+        except Exception as e:
+            LOCAL_DB.append(data)
+            return jsonify({"status": "fallback"})
+    else:
+        LOCAL_DB.append(data)
+        return jsonify({"status": "local"})
+
+@app.route('/health', methods=['GET'])
+def health_check(): return "OK", 200
+
+# Ruta principal para servir la web
+@app.route('/', defaults={'path': ''})
+@app.route('/<path:path>')
+def serve(path):
+    if path != "" and os.path.exists(app.static_folder + '/' + path):
+        return send_from_directory(app.static_folder, path)
+    return send_from_directory(app.static_folder, 'index.html')
+
+# --- DEBUGGING DE ARCHIVOS (LA LINTERNA) ---
+print("\n🕵️‍♂️ --- INSPECCIÓN DE ARCHIVOS ESTÁTICOS ---")
+try:
+    if os.path.exists(app.static_folder):
+        print(f"✅ La carpeta '{app.static_folder}' EXISTE.")
+        files = os.listdir(app.static_folder)
+        print(f"📄 Contenido: {files}")
+        if 'index.html' in files:
+            print("🎉 ¡index.html ENCONTRADO!")
+        else:
+            print("⚠️ index.html NO ESTÁ. Vite falló al construir.")
+    else:
+        print(f"❌ La carpeta '{app.static_folder}' NO EXISTE.")
+except Exception as e:
+    print(f"💥 Error inspeccionando: {e}")
+print("--------------------------------------------\n")
+
+if __name__ == '__main__':
+    port = int(os.environ.get("PORT", 5000))
+    app.run(host='0.0.0.0', port=port)
