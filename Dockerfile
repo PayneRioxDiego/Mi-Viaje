@@ -1,47 +1,45 @@
 # --- ETAPA 1: Construir el Frontend (La parte bonita) ---
-# Usamos Node.js para "cocinar" (compilar) tu código React
 FROM node:18 as build-step
 
 WORKDIR /app
 
-# Copiamos los archivos de configuración de Node
+# Copiamos los archivos de configuración
 COPY package*.json ./
 
-# Instalamos las dependencias de React (esto reemplaza a "npm install")
-RUN npm install
+# --- AQUÍ ESTÁ EL CAMBIO CLAVE ---
+# Agregamos '--legacy-peer-deps' para evitar errores de conflictos de versiones
+# Agregamos '--no-audit' para que no pierda tiempo buscando vulnerabilidades ahora
+RUN npm install --legacy-peer-deps --no-audit
 
-# Copiamos todo el código fuente del frontend
+# Copiamos todo el código fuente
 COPY . .
 
-# Construimos la carpeta 'dist' (esto reemplaza a "npm run build")
+# Construimos la carpeta 'dist'
 RUN npm run build
 
 
-# --- ETAPA 2: Configurar el Backend (Python + Motor) ---
-# Ahora usamos Python, igual que antes
+# --- ETAPA 2: Configurar el Backend (Python) ---
 FROM python:3.9-slim
 
-# Instalamos ffmpeg (necesario para yt-dlp)
+# Instalamos ffmpeg
 RUN apt-get update && \
     apt-get install -y ffmpeg && \
     apt-get clean
 
 WORKDIR /app
 
-# Copiamos los requerimientos de Python
+# Copiamos requerimientos e instalamos
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# --- AQUÍ ESTÁ EL TRUCO ---
-# Copiamos la carpeta 'dist' que creamos en la Etapa 1
-# y la pegamos dentro de la imagen de Python
+# Copiamos la carpeta 'dist' generada en la etapa 1
 COPY --from=build-step /app/dist ./dist
 
-# Copiamos el resto del código (server.py, etc.)
+# Copiamos el código del backend
 COPY . .
 
 # Exponemos el puerto
 EXPOSE 5000
 
-# Arrancamos el servidor (asegúrate que tu archivo se llame server.py)
+# Arrancamos
 CMD ["python", "server.py"]
