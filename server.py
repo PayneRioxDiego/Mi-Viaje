@@ -17,14 +17,18 @@ if not API_KEY:
     print("❌ ERROR: API_KEY not found in environment variables.")
 
 # Configure Gemini
-genai.configure(api_key=API_KEY)
+try:
+    genai.configure(api_key=API_KEY)
+except Exception as e:
+    print(f"❌ Error configuring Gemini: {e}")
 
 app = Flask(__name__)
-# Enable CORS for All Origins (needed so your phone/Vercel can hit this backend)
-CORS(app)
+# Enable CORS for All Origins explicitly to avoid localhost blocking
+CORS(app, resources={r"/*": {"origins": "*"}})
 
 def download_video(url):
     """Downloads video using yt-dlp to a temporary file."""
+    print(f"⬇️ Iniciando descarga de: {url}")
     temp_dir = tempfile.mkdtemp()
     timestamp = int(time.time())
     output_template = os.path.join(temp_dir, f'video_{timestamp}.%(ext)s')
@@ -34,6 +38,7 @@ def download_video(url):
         'outtmpl': output_template,
         'quiet': True,
         'no_warnings': True,
+        # 'cookiesfrombrowser': ('chrome',), # Uncomment if TikTok blocks downloads (requires chrome open)
     }
 
     try:
@@ -43,27 +48,33 @@ def download_video(url):
         # Find the downloaded file
         files = glob.glob(os.path.join(temp_dir, 'video_*'))
         if files:
+            print(f"✅ Video descargado en: {files[0]}")
             return files[0]
         return None
     except Exception as e:
-        print(f"Download Error: {e}")
+        print(f"❌ Download Error: {e}")
         return None
 
 def analyze_with_gemini(video_path):
     """Uploads video to Gemini and analyzes it."""
-    print(f"Uploading {video_path} to Gemini...")
+    print(f"📤 Subiendo {video_path} a Gemini...")
     
     # 1. Upload File
-    video_file = genai.upload_file(path=video_path)
+    try:
+        video_file = genai.upload_file(path=video_path)
+    except Exception as e:
+        raise Exception(f"Fallo al subir a Gemini: {e}")
     
     # 2. Wait for processing
+    print("⏳ Esperando procesamiento de video en la nube...")
     while video_file.state.name == "PROCESSING":
-        print("Waiting for video processing...")
         time.sleep(2)
         video_file = genai.get_file(video_file.name)
 
     if video_file.state.name == "FAILED":
         raise Exception("Video processing failed.")
+
+    print("🤖 Video listo. Generando análisis con IA...")
 
     # 3. Generate Content
     # Updated to use gemini-2.5-flash for better video performance
@@ -86,7 +97,6 @@ def analyze_with_gemini(video_path):
     }
     """
 
-    print("Generating analysis...")
     response = model.generate_content(
         [video_file, prompt],
         generation_config={
@@ -95,26 +105,30 @@ def analyze_with_gemini(video_path):
     )
 
     # Cleanup: Delete file from Gemini Cloud to save storage
-    genai.delete_file(video_file.name)
+    try:
+        genai.delete_file(video_file.name)
+    except:
+        pass
     
     return json.loads(response.text)
 
 @app.route('/analyze', methods=['POST'])
 def analyze_video():
+    print("🔔 Petición recibida en /analyze")
     data = request.json
     url = data.get('url')
 
     if not url:
         return jsonify({"error": "No URL provided"}), 400
 
-    print(f"Processing URL: {url}")
+    print(f"🔍 Procesando URL: {url}")
     
     video_path = None
     try:
         # 1. Download
         video_path = download_video(url)
         if not video_path:
-            return jsonify({"error": "Failed to download video"}), 500
+            return jsonify({"error": "Fallo al descargar el video. TikTok podría estar bloqueando la IP."}), 500
 
         # 2. Analyze
         analysis_result = analyze_with_gemini(video_path)
@@ -122,7 +136,7 @@ def analyze_video():
         return jsonify(analysis_result)
 
     except Exception as e:
-        print(f"Error: {e}")
+        print(f"❌ Error en servidor: {e}")
         return jsonify({"error": str(e)}), 500
     finally:
         # 3. Cleanup Local File
@@ -134,14 +148,12 @@ def analyze_video():
             except:
                 pass
 
-# Health check route for Render
 @app.route('/', methods=['GET'])
 def health_check():
-    return "Backend is running!", 200
+    return "Backend operativo", 200
 
 if __name__ == '__main__':
-    # Get PORT from environment (Render sets this automatically)
     port = int(os.environ.get("PORT", 5000))
-    print(f"🚀 Server running on port {port}")
-    # Host 0.0.0.0 is crucial for Docker/Cloud accessibility
+    print(f"🚀 COCINA (Servidor) LISTA en puerto {port}")
+    print(f"   Esperando pedidos del Camarero (Frontend)...")
     app.run(host='0.0.0.0', port=port)

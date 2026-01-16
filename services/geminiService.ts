@@ -18,9 +18,15 @@ const fileToGenerativePart = async (file: File): Promise<string> => {
 const wait = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
 // --- CONFIGURATION ---
-// In Vite, environment variables are accessed via import.meta.env
-// We default to localhost if the variable isn't set (Development mode)
-const BACKEND_URL = process.env.VITE_API_URL || 'http://localhost:5000';
+// Si estamos en Vercel, usará la variable de entorno. Si estamos en local, usará localhost.
+const getBackendUrl = () => {
+  const envUrl = process.env.VITE_API_URL;
+  // Limpiar slash final si existe para evitar dobles slashes //
+  if (envUrl) return envUrl.replace(/\/$/, "");
+  return 'http://localhost:5000';
+};
+
+const BACKEND_URL = getBackendUrl();
 
 // Secondary service function to get Grounding Data (Search + Maps)
 const getGroundingInfo = async (ai: GoogleGenAI, query: string): Promise<GroundingLink[]> => {
@@ -75,16 +81,16 @@ const getGroundingInfo = async (ai: GoogleGenAI, query: string): Promise<Groundi
 export const analyzeTravelVideo = async (source: File | string): Promise<TravelAnalysis> => {
   const apiKey = process.env.API_KEY;
   
-  // Note: For client-side demos, API keys are often exposed. 
-  // Ideally, use a proxy backend for Gemini calls too.
   if (!apiKey) {
-    console.warn("Advertencia: API Key no encontrada. Asegúrate de configurar API_KEY.");
+    console.warn("Advertencia: API Key no encontrada. Asegúrate de configurar API_KEY o VITE_GOOGLE_API_KEY.");
   }
 
   // --- PATH 1: URL ANALYSIS (Via Python Backend) ---
   if (typeof source === 'string') {
     try {
-      console.log(`Sending URL to Python Backend at ${BACKEND_URL}...`, source);
+      console.log(`📡 Conectando al Backend en: ${BACKEND_URL}/analyze`);
+      console.log(`📝 Procesando URL: ${source}`);
+      
       const response = await fetch(`${BACKEND_URL}/analyze`, {
         method: 'POST',
         headers: {
@@ -94,8 +100,8 @@ export const analyzeTravelVideo = async (source: File | string): Promise<TravelA
       });
 
       if (!response.ok) {
-        const errData = await response.json();
-        throw new Error(errData.error || "Backend Analysis Failed");
+        const errData = await response.json().catch(() => ({}));
+        throw new Error(errData.error || `Error del servidor (${response.status})`);
       }
 
       const analysisResult = await response.json() as TravelAnalysis;
@@ -111,9 +117,9 @@ export const analyzeTravelVideo = async (source: File | string): Promise<TravelA
       return analysisResult;
 
     } catch (error: any) {
-      console.error("Backend Error:", error);
+      console.error("❌ Error de Backend:", error);
       if (error.message.includes("Failed to fetch")) {
-        throw new Error(`No se pudo conectar con el servidor Backend (${BACKEND_URL}).`);
+        throw new Error(`No se pudo conectar con el servidor Backend (${BACKEND_URL}). ¿Está encendido?`);
       }
       throw error;
     }
