@@ -129,7 +129,26 @@ def analyze_with_gemini(video_path):
     except:
         pass
     
-    return json.loads(response.text)
+    # ... código anterior ...
+    
+    raw_data = json.loads(response.text)
+    
+    # --- BLOQUE DE SEGURIDAD (SANITIZACIÓN) ---
+    # Esto evita el error "toLowerCase" rellenando los vacíos
+    safe_data = {
+        "category": raw_data.get("category") or "Otro",  # Si es null, pone "Otro"
+        "placeName": raw_data.get("placeName") or "Lugar Desconocido",
+        "estimatedLocation": raw_data.get("estimatedLocation") or "Ubicación no encontrada",
+        "priceRange": raw_data.get("priceRange") or "Precio desconocido",
+        "summary": raw_data.get("summary") or "No se pudo generar resumen.",
+        "score": raw_data.get("score") or 0,
+        "confidenceLevel": raw_data.get("confidenceLevel") or "Bajo", # Importante para colores
+        "criticalVerdict": raw_data.get("criticalVerdict") or "Sin veredicto",
+        "isTouristTrap": raw_data.get("isTouristTrap") if raw_data.get("isTouristTrap") is not None else False
+    }
+
+    print("✅ Datos enviados al frontend:", safe_data) # Para ver en los logs
+    return safe_data
 
 # --- API ROUTES ---
 
