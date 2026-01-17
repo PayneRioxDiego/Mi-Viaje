@@ -28,7 +28,7 @@ CORS(app)
 # Memoria Local
 LOCAL_DB = []
 
-# --- GOOGLE SHEETS (Conexión) ---
+# --- GOOGLE SHEETS ---
 def get_db_connection():
     creds_json = os.getenv("GOOGLE_CREDENTIALS_JSON")
     sheet_id = os.getenv("GOOGLE_SHEET_ID")
@@ -42,38 +42,6 @@ def get_db_connection():
     except Exception as e:
         print(f"❌ Error Sheets: {e}")
         return None
-
-# --- FUNCIÓN INTERNA PARA GUARDAR (REAL) ---
-def save_data_internal(data):
-    """Guarda los datos directamente desde el servidor (backend)"""
-    print(f"💾 AUTO-GUARDADO BACKEND: {data.get('placeName')}")
-    sheet = get_db_connection()
-    
-    # Orden estricto de columnas para tu Excel nuevo
-    row = [
-        data.get('id'),
-        data.get('timestamp'),
-        data.get('placeName'),
-        data.get('category'),
-        data.get('score'),
-        data.get('estimatedLocation'),
-        data.get('summary'),
-        data.get('fileName')
-    ]
-
-    if sheet:
-        try:
-            sheet.append_row(row)
-            print("✅ Guardado en Google Sheets con éxito")
-            return True
-        except Exception as e:
-            print(f"❌ Fallo al guardar en Sheets: {e}")
-            LOCAL_DB.append(data)
-            return False
-    else:
-        LOCAL_DB.append(data)
-        print("⚠️ Guardado en memoria local (Sheets no configurado)")
-        return False
 
 # --- DESCARGA ---
 def download_video(url):
@@ -109,7 +77,6 @@ def analyze_with_gemini(video_path):
 
     print("🤖 Analizando con Gemini 2.5 Flash...")
     
-    # Intento principal con 2.5 Flash
     try:
         model = genai.GenerativeModel(model_name="gemini-2.5-flash")
     except:
@@ -119,7 +86,7 @@ def analyze_with_gemini(video_path):
     prompt = """
     Analiza este video de viaje.
     Responde ÚNICAMENTE con un JSON válido. No uses bloques de código markdown.
-    Usa estas claves exactas en Inglés (coinciden con el Excel):
+    Usa estas claves exactas en Inglés:
     {
       "category": "Lugar/Comida/Otro",
       "placeName": "Nombre del lugar o ciudad",
@@ -177,13 +144,11 @@ def analyze_video():
         video_path = download_video(url)
         if not video_path: return jsonify({"error": "Error descarga"}), 500
 
-        # 1. Analizamos
         result = analyze_with_gemini(video_path)
         
-        # 2. AUTO-GUARDADO (Aquí guardamos de verdad)
-        save_data_internal(result)
-
-        # 3. Devolvemos los datos al frontend para que los pinte
+        # AQUÍ ESTÁ EL CAMBIO: Ya NO guardamos automáticamente.
+        # Dejamos que el frontend lo haga cuando reciba la respuesta.
+        
         return jsonify(result)
     except Exception as e:
         return jsonify({"error": str(e)}), 500
@@ -220,16 +185,32 @@ def get_history():
         clean_records.append(safe_record)
     return jsonify(clean_records)
 
-# --- LA CURA ANTI-DUPLICADOS ---
 @app.route('/api/history', methods=['POST'])
 def save_history():
-    """
-    El Frontend intentará llamar a esto para guardar.
-    Nosotros le decimos 'OK' pero NO hacemos nada en Excel,
-    porque ya lo guardamos automáticamente en /analyze.
-    """
-    print("🛑 Frontend intentó guardar (Duplicado prevenido).")
-    return jsonify({"status": "ignored_duplicate"})
+    # VOLVEMOS A GUARDAR DE VERDAD
+    # El Frontend llama a esto después de recibir el análisis
+    data = request.json
+    sheet = get_db_connection()
+    if sheet:
+        try:
+            row = [
+                data.get('id'),
+                data.get('timestamp'),
+                data.get('placeName'),
+                data.get('category'),
+                data.get('score'),
+                data.get('estimatedLocation'),
+                data.get('summary'),
+                data.get('fileName')
+            ]
+            sheet.append_row(row)
+            return jsonify({"status": "saved"})
+        except Exception as e:
+            LOCAL_DB.append(data)
+            return jsonify({"status": "fallback"})
+    else:
+        LOCAL_DB.append(data)
+        return jsonify({"status": "local"})
 
 @app.route('/health', methods=['GET'])
 def health_check(): return "OK", 200
