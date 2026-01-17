@@ -77,9 +77,8 @@ def analyze_with_gemini(video_path):
 
     print("🤖 Analizando...")
     
-    # --- AQUÍ ESTABA EL ERROR ---
-    # Usamos el nombre técnico exacto y alineado correctamente
-    model = genai.GenerativeModel(model_name="gemini-1.5-flash-001")
+    # --- CAMBIO AQUÍ: Usamos PRO para máxima compatibilidad ---
+    model = genai.GenerativeModel(model_name="gemini-1.5-pro")
     
     prompt = """
     Analiza este video de viaje.
