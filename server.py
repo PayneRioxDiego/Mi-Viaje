@@ -21,14 +21,14 @@ if not API_KEY: print("❌ ERROR: API_KEY not found.")
 try: genai.configure(api_key=API_KEY)
 except Exception as e: print(f"❌ Error Gemini: {e}")
 
-# Flask
+# Flask (Busca los archivos del frontend en la carpeta 'dist')
 app = Flask(__name__, static_folder='dist', static_url_path='')
 CORS(app)
 
-# Memoria Local
+# Memoria Local (Respaldo por si falla Sheets)
 LOCAL_DB = []
 
-# --- GOOGLE SHEETS ---
+# --- GOOGLE SHEETS (Conexión) ---
 def get_db_connection():
     creds_json = os.getenv("GOOGLE_CREDENTIALS_JSON")
     sheet_id = os.getenv("GOOGLE_SHEET_ID")
@@ -43,7 +43,7 @@ def get_db_connection():
         print(f"❌ Error Sheets: {e}")
         return None
 
-# --- DESCARGA ---
+# --- DESCARGA DE VIDEO (Modo iPhone para evitar bloqueos) ---
 def download_video(url):
     print(f"⬇️ Descargando: {url}")
     temp_dir = tempfile.mkdtemp()
@@ -64,7 +64,7 @@ def download_video(url):
         print(f"❌ Error descarga: {e}")
         return None
 
-# --- ANALISIS ---
+# --- ANÁLISIS CON GEMINI (Ahora en Español) ---
 def analyze_with_gemini(video_path):
     print(f"📤 Subiendo a Gemini...")
     try:
@@ -75,33 +75,41 @@ def analyze_with_gemini(video_path):
     except Exception as e:
         raise Exception(f"Error subida Gemini: {e}")
 
-    print("🤖 Analizando con Gemini 2.5 Flash...")
+    print("🤖 Analizando con Gemini 2.5 Flash (Modo Español)...")
     
+    # Selección de Modelo (Prioridad: 2.5 Flash -> Fallback: Pro)
     try:
         model = genai.GenerativeModel(model_name="gemini-2.5-flash")
     except:
         print("⚠️ Gemini 2.5 no disponible, usando fallback gemini-pro...")
         model = genai.GenerativeModel(model_name="gemini-pro")
     
+    # PROMPT CORREGIDO: Pide claves en Inglés pero contenido en Español
     prompt = """
     Analiza este video de viaje.
     Responde ÚNICAMENTE con un JSON válido. No uses bloques de código markdown.
-    Usa estas claves exactas en Inglés:
+    
+    INSTRUCCIONES DE IDIOMA:
+    1. Las CLAVES (keys) del JSON deben mantenerse en INGLÉS (ej: "summary", "placeName") para que el sistema funcione.
+    2. Los VALORES (el texto de respuesta) deben estar estrictamente EN ESPAÑOL.
+
+    Usa estas claves exactas en el JSON:
     {
       "category": "Lugar/Comida/Otro",
       "placeName": "Nombre del lugar o ciudad",
       "estimatedLocation": "Ciudad, País",
-      "priceRange": "Precio estimado",
-      "summary": "Resumen corto y atractivo",
+      "priceRange": "Precio estimado (en moneda local o dólares)",
+      "summary": "Resumen corto, atractivo y útil en Español",
       "score": 5,
       "confidenceLevel": "Alto",
-      "criticalVerdict": "Opinión honesta",
+      "criticalVerdict": "Opinión honesta y crítica en Español sobre si vale la pena ir",
       "isTouristTrap": false
     }
     """
     
     response = model.generate_content([video_file, prompt], generation_config={"response_mime_type": "application/json"})
     
+    # Limpieza de la respuesta
     clean_text = response.text.replace("```json", "").replace("```", "").strip()
     try:
         raw_data = json.loads(clean_text)
@@ -110,9 +118,11 @@ def analyze_with_gemini(video_path):
 
     if isinstance(raw_data, list): raw_data = raw_data[0] if len(raw_data) > 0 else {}
     
+    # Borrar video de la nube de Google
     try: genai.delete_file(video_file.name)
     except: pass
 
+    # Preparar datos seguros
     current_time = int(time.time() * 1000)
     unique_id = str(uuid.uuid4())
 
@@ -132,9 +142,11 @@ def analyze_with_gemini(video_path):
     }
     return safe_data
 
-# --- RUTAS ---
+# --- RUTAS DE LA API ---
+
 @app.route('/analyze', methods=['POST'])
 def analyze_video():
+    """Ruta principal: Descarga, Analiza y Devuelve resultado (No guarda aún)"""
     try:
         data = request.json
         if isinstance(data, list): data = data[0]
@@ -145,10 +157,6 @@ def analyze_video():
         if not video_path: return jsonify({"error": "Error descarga"}), 500
 
         result = analyze_with_gemini(video_path)
-        
-        # AQUÍ ESTÁ EL CAMBIO: Ya NO guardamos automáticamente.
-        # Dejamos que el frontend lo haga cuando reciba la respuesta.
-        
         return jsonify(result)
     except Exception as e:
         return jsonify({"error": str(e)}), 500
@@ -160,6 +168,7 @@ def analyze_video():
 
 @app.route('/api/history', methods=['GET'])
 def get_history():
+    """Lee el historial desde Google Sheets"""
     sheet = get_db_connection()
     raw_records = []
     if sheet:
@@ -170,6 +179,7 @@ def get_history():
     clean_records = []
     for record in raw_records:
         if not isinstance(record, dict): continue
+        # Mapeo seguro de columnas
         safe_record = {
             "id": str(record.get("id") or ""),
             "timestamp": record.get("timestamp") or 0,
@@ -187,12 +197,12 @@ def get_history():
 
 @app.route('/api/history', methods=['POST'])
 def save_history():
-    # VOLVEMOS A GUARDAR DE VERDAD
-    # El Frontend llama a esto después de recibir el análisis
+    """Guarda el resultado en Google Sheets (Llamado por el Frontend)"""
     data = request.json
     sheet = get_db_connection()
     if sheet:
         try:
+            # Orden estricto de columnas para coincidir con tu Excel
             row = [
                 data.get('id'),
                 data.get('timestamp'),
@@ -215,6 +225,7 @@ def save_history():
 @app.route('/health', methods=['GET'])
 def health_check(): return "OK", 200
 
+# Ruta para servir la página web (React/Vite)
 @app.route('/', defaults={'path': ''})
 @app.route('/<path:path>')
 def serve(path):
