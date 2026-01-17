@@ -21,7 +21,7 @@ if not API_KEY: print("❌ ERROR: API_KEY not found.")
 try: genai.configure(api_key=API_KEY)
 except Exception as e: print(f"❌ Error Gemini: {e}")
 
-# Flask (Aseguramos que busque en 'dist')
+# Flask
 app = Flask(__name__, static_folder='dist', static_url_path='')
 CORS(app)
 
@@ -77,8 +77,14 @@ def analyze_with_gemini(video_path):
 
     print("🤖 Analizando...")
     
-    # --- CAMBIO AQUÍ: Usamos PRO para máxima compatibilidad ---
-    model = genai.GenerativeModel(model_name="gemini-1.5-pro")
+    # --- CAMBIO IMPORTANTE: Usamos Gemini 2.5 Flash ---
+    # Coincide con lo que vimos en tu captura de pantalla
+    try:
+        model = genai.GenerativeModel(model_name="gemini-2.5-flash")
+    except:
+        # Plan B: Si falla, intentamos con el genérico "gemini-pro"
+        print("⚠️ Gemini 2.5 no respondió, probando genérico...")
+        model = genai.GenerativeModel(model_name="gemini-pro")
     
     prompt = """
     Analiza este video de viaje.
@@ -216,6 +222,16 @@ def serve(path):
     if path != "" and os.path.exists(app.static_folder + '/' + path):
         return send_from_directory(app.static_folder, path)
     return send_from_directory(app.static_folder, 'index.html')
+
+# --- DEBUGGING DE ARCHIVOS ---
+print("\n🔍 --- LISTA DE MODELOS DISPONIBLES (DEBUG) ---")
+try:
+    for m in genai.list_models():
+        if 'generateContent' in m.supported_generation_methods:
+            print(f"👉 {m.name}")
+except Exception as e:
+    print(f"❌ No se pudo listar modelos (puede ser normal por versión antigua): {e}")
+print("-----------------------------------------------\n")
 
 if __name__ == '__main__':
     port = int(os.environ.get("PORT", 5000))
