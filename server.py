@@ -200,4 +200,45 @@ def get_history():
     sheet = get_db_connection()
     raw_records = []
     if sheet:
-        try: raw_records = sheet.
+        try: raw_records = sheet.get_all_records()
+        except: raw_records = LOCAL_DB
+    else: raw_records = LOCAL_DB
+
+    clean_records = []
+    for record in raw_records:
+        if not isinstance(record, dict): continue
+        safe_record = {
+            "id": str(record.get("id") or ""),
+            "timestamp": record.get("timestamp") or 0,
+            "placeName": str(record.get("placeName") or "Desconocido"),
+            "category": str(record.get("category") or "Otro"), 
+            "score": record.get("score") or 0,
+            "estimatedLocation": str(record.get("estimatedLocation") or ""),
+            "summary": str(record.get("summary") or ""),
+            "fileName": str(record.get("fileName") or ""),
+            "confidenceLevel": str(record.get("confidenceLevel") or "Bajo"),
+            "criticalVerdict": str(record.get("criticalVerdict") or "")
+        }
+        clean_records.append(safe_record)
+    return jsonify(clean_records)
+
+# Mantenemos esta ruta por si acaso, pero ya no es crítica
+@app.route('/api/history', methods=['POST'])
+def save_history():
+    data = request.json
+    save_data_internal(data)
+    return jsonify({"status": "saved"})
+
+@app.route('/health', methods=['GET'])
+def health_check(): return "OK", 200
+
+@app.route('/', defaults={'path': ''})
+@app.route('/<path:path>')
+def serve(path):
+    if path != "" and os.path.exists(app.static_folder + '/' + path):
+        return send_from_directory(app.static_folder, path)
+    return send_from_directory(app.static_folder, 'index.html')
+
+if __name__ == '__main__':
+    port = int(os.environ.get("PORT", 5000))
+    app.run(host='0.0.0.0', port=port)
