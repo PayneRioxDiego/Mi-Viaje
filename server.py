@@ -28,7 +28,7 @@ CORS(app)
 # Memoria Local
 LOCAL_DB = []
 
-# --- GOOGLE SHEETS ---
+# --- GOOGLE SHEETS (Conexión) ---
 def get_db_connection():
     creds_json = os.getenv("GOOGLE_CREDENTIALS_JSON")
     sheet_id = os.getenv("GOOGLE_SHEET_ID")
@@ -42,6 +42,38 @@ def get_db_connection():
     except Exception as e:
         print(f"❌ Error Sheets: {e}")
         return None
+
+# --- FUNCIÓN INTERNA PARA GUARDAR (NUEVO) ---
+def save_data_internal(data):
+    """Guarda los datos directamente desde el servidor sin esperar al frontend"""
+    print(f"💾 AUTO-GUARDADO INICIADO: {data.get('placeName')}")
+    sheet = get_db_connection()
+    
+    # Preparamos la fila en orden estricto
+    row = [
+        data.get('id'),
+        data.get('timestamp'),
+        data.get('placeName'),
+        data.get('category'),
+        data.get('score'),
+        data.get('estimatedLocation'),
+        data.get('summary'),
+        data.get('fileName')
+    ]
+
+    if sheet:
+        try:
+            sheet.append_row(row)
+            print("✅ Guardado en Google Sheets con éxito")
+            return True
+        except Exception as e:
+            print(f"❌ Fallo al guardar en Sheets: {e}")
+            LOCAL_DB.append(data)
+            return False
+    else:
+        LOCAL_DB.append(data)
+        print("⚠️ Guardado en memoria local (Sheets no configurado)")
+        return False
 
 # --- DESCARGA ---
 def download_video(url):
@@ -75,15 +107,13 @@ def analyze_with_gemini(video_path):
     except Exception as e:
         raise Exception(f"Error subida Gemini: {e}")
 
-    print("🤖 Analizando...")
+    print("🤖 Analizando con Gemini 2.5 Flash...")
     
-    # --- CAMBIO IMPORTANTE: Usamos Gemini 2.5 Flash ---
-    # Coincide con lo que vimos en tu captura de pantalla
+    # Usamos Gemini 2.5 Flash (según tu confirmación visual)
     try:
         model = genai.GenerativeModel(model_name="gemini-2.5-flash")
     except:
-        # Plan B: Si falla, intentamos con el genérico "gemini-pro"
-        print("⚠️ Gemini 2.5 no respondió, probando genérico...")
+        print("⚠️ Gemini 2.5 no disponible, usando fallback...")
         model = genai.GenerativeModel(model_name="gemini-pro")
     
     prompt = """
@@ -105,7 +135,7 @@ def analyze_with_gemini(video_path):
     
     response = model.generate_content([video_file, prompt], generation_config={"response_mime_type": "application/json"})
     
-    # Limpieza y Parseo
+    # Limpieza
     clean_text = response.text.replace("```json", "").replace("```", "").strip()
     try:
         raw_data = json.loads(clean_text)
@@ -114,11 +144,9 @@ def analyze_with_gemini(video_path):
 
     if isinstance(raw_data, list): raw_data = raw_data[0] if len(raw_data) > 0 else {}
     
-    # Eliminar video de la nube
     try: genai.delete_file(video_file.name)
     except: pass
 
-    # Generamos ID y Timestamp
     current_time = int(time.time() * 1000)
     unique_id = str(uuid.uuid4())
 
@@ -150,7 +178,14 @@ def analyze_video():
         video_path = download_video(url)
         if not video_path: return jsonify({"error": "Error descarga"}), 500
 
+        # 1. Analizamos
         result = analyze_with_gemini(video_path)
+        
+        # 2. AUTO-GUARDADO (¡La magia ocurre aquí!)
+        # Guardamos inmediatamente en Sheets sin esperar al frontend
+        save_data_internal(result)
+
+        # 3. Respondemos al frontend
         return jsonify(result)
     except Exception as e:
         return jsonify({"error": str(e)}), 500
@@ -165,74 +200,4 @@ def get_history():
     sheet = get_db_connection()
     raw_records = []
     if sheet:
-        try: raw_records = sheet.get_all_records()
-        except: raw_records = LOCAL_DB
-    else: raw_records = LOCAL_DB
-
-    clean_records = []
-    for record in raw_records:
-        if not isinstance(record, dict): continue
-        safe_record = {
-            "id": str(record.get("id") or ""),
-            "timestamp": record.get("timestamp") or 0,
-            "placeName": str(record.get("placeName") or "Desconocido"),
-            "category": str(record.get("category") or "Otro"), 
-            "score": record.get("score") or 0,
-            "estimatedLocation": str(record.get("estimatedLocation") or ""),
-            "summary": str(record.get("summary") or ""),
-            "fileName": str(record.get("fileName") or ""),
-            "confidenceLevel": str(record.get("confidenceLevel") or "Bajo"),
-            "criticalVerdict": str(record.get("criticalVerdict") or "")
-        }
-        clean_records.append(safe_record)
-    return jsonify(clean_records)
-
-@app.route('/api/history', methods=['POST'])
-def save_history():
-    data = request.json
-    sheet = get_db_connection()
-    if sheet:
-        try:
-            row = [
-                data.get('id'),
-                data.get('timestamp'),
-                data.get('placeName'),
-                data.get('category'),
-                data.get('score'),
-                data.get('estimatedLocation'),
-                data.get('summary'),
-                data.get('fileName')
-            ]
-            sheet.append_row(row)
-            return jsonify({"status": "saved"})
-        except Exception as e:
-            LOCAL_DB.append(data)
-            return jsonify({"status": "fallback"})
-    else:
-        LOCAL_DB.append(data)
-        return jsonify({"status": "local"})
-
-@app.route('/health', methods=['GET'])
-def health_check(): return "OK", 200
-
-# Ruta principal para servir la web
-@app.route('/', defaults={'path': ''})
-@app.route('/<path:path>')
-def serve(path):
-    if path != "" and os.path.exists(app.static_folder + '/' + path):
-        return send_from_directory(app.static_folder, path)
-    return send_from_directory(app.static_folder, 'index.html')
-
-# --- DEBUGGING DE ARCHIVOS ---
-print("\n🔍 --- LISTA DE MODELOS DISPONIBLES (DEBUG) ---")
-try:
-    for m in genai.list_models():
-        if 'generateContent' in m.supported_generation_methods:
-            print(f"👉 {m.name}")
-except Exception as e:
-    print(f"❌ No se pudo listar modelos (puede ser normal por versión antigua): {e}")
-print("-----------------------------------------------\n")
-
-if __name__ == '__main__':
-    port = int(os.environ.get("PORT", 5000))
-    app.run(host='0.0.0.0', port=port)
+        try: raw_records = sheet.
