@@ -151,4 +151,96 @@ def analyze_with_gemini(video_path):
 
     safe_data = {
         "id": unique_id,
-        "timestamp
+        "timestamp": current_time,
+        "category": str(raw_data.get("category") or "Otro"),
+        "placeName": str(raw_data.get("placeName") or "Lugar Desconocido"),
+        "estimatedLocation": str(raw_data.get("estimatedLocation") or "Ubicación no encontrada"),
+        "priceRange": str(raw_data.get("priceRange") or "??"),
+        "summary": str(raw_data.get("summary") or "Sin resumen disponible"),
+        "score": raw_data.get("score") or 0,
+        "confidenceLevel": str(raw_data.get("confidenceLevel") or "Bajo"),
+        "criticalVerdict": str(raw_data.get("criticalVerdict") or "Sin veredicto"),
+        "isTouristTrap": bool(raw_data.get("isTouristTrap")),
+        "fileName": "Video TikTok"
+    }
+    return safe_data
+
+# --- RUTAS ---
+@app.route('/analyze', methods=['POST'])
+def analyze_video():
+    try:
+        data = request.json
+        if isinstance(data, list): data = data[0]
+        url = data.get('url')
+        if not url: return jsonify({"error": "No URL"}), 400
+
+        video_path = download_video(url)
+        if not video_path: return jsonify({"error": "Error descarga"}), 500
+
+        # 1. Analizamos
+        result = analyze_with_gemini(video_path)
+        
+        # 2. AUTO-GUARDADO (Aquí guardamos de verdad)
+        save_data_internal(result)
+
+        # 3. Devolvemos los datos al frontend para que los pinte
+        return jsonify(result)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+    finally:
+        try:
+            if 'video_path' in locals() and video_path and os.path.exists(video_path):
+                os.remove(video_path)
+        except: pass
+
+@app.route('/api/history', methods=['GET'])
+def get_history():
+    sheet = get_db_connection()
+    raw_records = []
+    if sheet:
+        try: raw_records = sheet.get_all_records()
+        except: raw_records = LOCAL_DB
+    else: raw_records = LOCAL_DB
+
+    clean_records = []
+    for record in raw_records:
+        if not isinstance(record, dict): continue
+        safe_record = {
+            "id": str(record.get("id") or ""),
+            "timestamp": record.get("timestamp") or 0,
+            "placeName": str(record.get("placeName") or "Desconocido"),
+            "category": str(record.get("category") or "Otro"), 
+            "score": record.get("score") or 0,
+            "estimatedLocation": str(record.get("estimatedLocation") or ""),
+            "summary": str(record.get("summary") or ""),
+            "fileName": str(record.get("fileName") or ""),
+            "confidenceLevel": str(record.get("confidenceLevel") or "Bajo"),
+            "criticalVerdict": str(record.get("criticalVerdict") or "")
+        }
+        clean_records.append(safe_record)
+    return jsonify(clean_records)
+
+# --- LA CURA ANTI-DUPLICADOS ---
+@app.route('/api/history', methods=['POST'])
+def save_history():
+    """
+    El Frontend intentará llamar a esto para guardar.
+    Nosotros le decimos 'OK' pero NO hacemos nada en Excel,
+    porque ya lo guardamos automáticamente en /analyze.
+    """
+    print("🛑 Frontend intentó guardar (Duplicado prevenido).")
+    return jsonify({"status": "ignored_duplicate"})
+
+@app.route('/health', methods=['GET'])
+def health_check(): return "OK", 200
+
+@app.route('/', defaults={'path': ''})
+@app.route('/<path:path>')
+def serve(path):
+    if path != "" and os.path.exists(app.static_folder + '/' + path):
+        return send_from_directory(app.static_folder, path)
+    return send_from_directory(app.static_folder, 'index.html')
+
+if __name__ == '__main__':
+    port = int(os.environ.get("PORT", 5000))
+    app.run(host='0.0.0.0', port=port)
