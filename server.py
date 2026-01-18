@@ -4,6 +4,7 @@ import json
 import glob
 import tempfile
 import uuid
+import requests  # NECESARIO PARA HABLAR CON MAPS
 from flask import Flask, request, jsonify, send_from_directory
 from flask_cors import CORS
 import yt_dlp
@@ -15,20 +16,21 @@ from oauth2client.service_account import ServiceAccountCredentials
 # --- CONFIGURACIÓN ---
 load_dotenv()
 API_KEY = os.getenv("API_KEY")
+MAPS_API_KEY = os.getenv("GOOGLE_MAPS_API_KEY") # Nueva llave
 
 # Gemini
 if not API_KEY: print("❌ ERROR: API_KEY not found.")
 try: genai.configure(api_key=API_KEY)
 except Exception as e: print(f"❌ Error Gemini: {e}")
 
-# Flask (Busca los archivos del frontend en la carpeta 'dist')
+# Flask
 app = Flask(__name__, static_folder='dist', static_url_path='')
 CORS(app)
 
-# Memoria Local (Respaldo por si falla Sheets)
+# Memoria Local
 LOCAL_DB = []
 
-# --- GOOGLE SHEETS (Conexión) ---
+# --- GOOGLE SHEETS ---
 def get_db_connection():
     creds_json = os.getenv("GOOGLE_CREDENTIALS_JSON")
     sheet_id = os.getenv("GOOGLE_SHEET_ID")
@@ -43,7 +45,48 @@ def get_db_connection():
         print(f"❌ Error Sheets: {e}")
         return None
 
-# --- DESCARGA DE VIDEO (Modo iPhone para evitar bloqueos) ---
+# --- NUEVA FUNCIÓN: VERIFICACIÓN CON GOOGLE MAPS ---
+def verify_location_with_maps(place_name, location_hint):
+    if not MAPS_API_KEY:
+        print("⚠️ No hay MAPS_API_KEY configurada. Saltando verificación.")
+        return None
+
+    print(f"🗺️ Verificando en Maps: {place_name} ({location_hint})...")
+    
+    # Usamos la API "Text Search (New)" de Google Maps
+    url = "https://places.googleapis.com/v1/places:searchText"
+    headers = {
+        "Content-Type": "application/json",
+        "X-Goog-Api-Key": MAPS_API_KEY,
+        "X-Goog-FieldMask": "places.displayName,places.formattedAddress,places.id,places.location"
+    }
+    
+    # Buscamos combinando el nombre y la pista de ubicación (ciudad/país)
+    query = f"{place_name} {location_hint}"
+    payload = {"textQuery": query}
+
+    try:
+        response = requests.post(url, headers=headers, json=payload)
+        data = response.json()
+        
+        if "places" in data and len(data["places"]) > 0:
+            best_match = data["places"][0] # Tomamos el mejor resultado
+            print(f"✅ Lugar encontrado: {best_match.get('displayName', {}).get('text')}")
+            return {
+                "officialName": best_match.get("displayName", {}).get("text"),
+                "address": best_match.get("formattedAddress"),
+                "placeId": best_match.get("id"),
+                "lat": best_match.get("location", {}).get("latitude"),
+                "lng": best_match.get("location", {}).get("longitude")
+            }
+        else:
+            print("❌ Maps no encontró este lugar.")
+            return None
+    except Exception as e:
+        print(f"⚠️ Error conectando con Maps: {e}")
+        return None
+
+# --- DESCARGA ---
 def download_video(url):
     print(f"⬇️ Descargando: {url}")
     temp_dir = tempfile.mkdtemp()
@@ -64,7 +107,7 @@ def download_video(url):
         print(f"❌ Error descarga: {e}")
         return None
 
-# --- ANÁLISIS CON GEMINI (Ahora en Español) ---
+# --- ANÁLISIS ---
 def analyze_with_gemini(video_path):
     print(f"📤 Subiendo a Gemini...")
     try:
@@ -75,41 +118,36 @@ def analyze_with_gemini(video_path):
     except Exception as e:
         raise Exception(f"Error subida Gemini: {e}")
 
-    print("🤖 Analizando con Gemini 2.5 Flash (Modo Español)...")
-    
-    # Selección de Modelo (Prioridad: 2.5 Flash -> Fallback: Pro)
+    print("🤖 Analizando con Gemini 2.5 Flash...")
     try:
         model = genai.GenerativeModel(model_name="gemini-2.5-flash")
     except:
-        print("⚠️ Gemini 2.5 no disponible, usando fallback gemini-pro...")
         model = genai.GenerativeModel(model_name="gemini-pro")
     
-    # PROMPT CORREGIDO: Pide claves en Inglés pero contenido en Español
     prompt = """
     Analiza este video de viaje.
-    Responde ÚNICAMENTE con un JSON válido. No uses bloques de código markdown.
+    Responde ÚNICAMENTE con un JSON válido.
     
     INSTRUCCIONES DE IDIOMA:
-    1. Las CLAVES (keys) del JSON deben mantenerse en INGLÉS (ej: "summary", "placeName") para que el sistema funcione.
-    2. Los VALORES (el texto de respuesta) deben estar estrictamente EN ESPAÑOL.
+    1. Las CLAVES (keys) del JSON en INGLÉS.
+    2. Los VALORES en ESPAÑOL.
 
-    Usa estas claves exactas en el JSON:
+    JSON Template:
     {
       "category": "Lugar/Comida/Otro",
-      "placeName": "Nombre del lugar o ciudad",
+      "placeName": "Nombre del lugar",
       "estimatedLocation": "Ciudad, País",
-      "priceRange": "Precio estimado (en moneda local o dólares)",
-      "summary": "Resumen corto, atractivo y útil en Español",
+      "priceRange": "Precio estimado",
+      "summary": "Resumen en español",
       "score": 5,
       "confidenceLevel": "Alto",
-      "criticalVerdict": "Opinión honesta y crítica en Español sobre si vale la pena ir",
+      "criticalVerdict": "Opinión crítica",
       "isTouristTrap": false
     }
     """
     
     response = model.generate_content([video_file, prompt], generation_config={"response_mime_type": "application/json"})
     
-    # Limpieza de la respuesta
     clean_text = response.text.replace("```json", "").replace("```", "").strip()
     try:
         raw_data = json.loads(clean_text)
@@ -118,11 +156,25 @@ def analyze_with_gemini(video_path):
 
     if isinstance(raw_data, list): raw_data = raw_data[0] if len(raw_data) > 0 else {}
     
-    # Borrar video de la nube de Google
     try: genai.delete_file(video_file.name)
     except: pass
 
-    # Preparar datos seguros
+    # --- FASE DE VERIFICACIÓN (NUEVO) ---
+    # Aquí es donde Gemini deja de "adivinar" y Maps confirma la verdad
+    guessed_name = str(raw_data.get("placeName") or "")
+    guessed_location = str(raw_data.get("estimatedLocation") or "")
+    
+    maps_data = verify_location_with_maps(guessed_name, guessed_location)
+    
+    final_place_name = guessed_name
+    final_location = guessed_location
+    
+    # Si Maps encontró el lugar real, usamos sus datos oficiales
+    if maps_data:
+        final_place_name = maps_data["officialName"]
+        final_location = maps_data["address"]
+        # (Aquí podríamos guardar el ID y coordenadas en el futuro)
+
     current_time = int(time.time() * 1000)
     unique_id = str(uuid.uuid4())
 
@@ -130,10 +182,10 @@ def analyze_with_gemini(video_path):
         "id": unique_id,
         "timestamp": current_time,
         "category": str(raw_data.get("category") or "Otro"),
-        "placeName": str(raw_data.get("placeName") or "Lugar Desconocido"),
-        "estimatedLocation": str(raw_data.get("estimatedLocation") or "Ubicación no encontrada"),
+        "placeName": final_place_name,         # Dato verificado (o adivinado si falló maps)
+        "estimatedLocation": final_location,   # Dato verificado
         "priceRange": str(raw_data.get("priceRange") or "??"),
-        "summary": str(raw_data.get("summary") or "Sin resumen disponible"),
+        "summary": str(raw_data.get("summary") or "Sin resumen"),
         "score": raw_data.get("score") or 0,
         "confidenceLevel": str(raw_data.get("confidenceLevel") or "Bajo"),
         "criticalVerdict": str(raw_data.get("criticalVerdict") or "Sin veredicto"),
@@ -142,11 +194,9 @@ def analyze_with_gemini(video_path):
     }
     return safe_data
 
-# --- RUTAS DE LA API ---
-
+# --- RUTAS ---
 @app.route('/analyze', methods=['POST'])
 def analyze_video():
-    """Ruta principal: Descarga, Analiza y Devuelve resultado (No guarda aún)"""
     try:
         data = request.json
         if isinstance(data, list): data = data[0]
@@ -168,7 +218,6 @@ def analyze_video():
 
 @app.route('/api/history', methods=['GET'])
 def get_history():
-    """Lee el historial desde Google Sheets"""
     sheet = get_db_connection()
     raw_records = []
     if sheet:
@@ -179,7 +228,6 @@ def get_history():
     clean_records = []
     for record in raw_records:
         if not isinstance(record, dict): continue
-        # Mapeo seguro de columnas
         safe_record = {
             "id": str(record.get("id") or ""),
             "timestamp": record.get("timestamp") or 0,
@@ -197,12 +245,10 @@ def get_history():
 
 @app.route('/api/history', methods=['POST'])
 def save_history():
-    """Guarda el resultado en Google Sheets (Llamado por el Frontend)"""
     data = request.json
     sheet = get_db_connection()
     if sheet:
         try:
-            # Orden estricto de columnas para coincidir con tu Excel
             row = [
                 data.get('id'),
                 data.get('timestamp'),
@@ -225,7 +271,6 @@ def save_history():
 @app.route('/health', methods=['GET'])
 def health_check(): return "OK", 200
 
-# Ruta para servir la página web (React/Vite)
 @app.route('/', defaults={'path': ''})
 @app.route('/<path:path>')
 def serve(path):
