@@ -13,7 +13,10 @@ const App: React.FC = () => {
 
   // Logic State
   const [status, setStatus] = useState<AnalysisStatus>(AnalysisStatus.IDLE);
-  const [currentResult, setCurrentResult] = useState<TravelAnalysis | null>(null);
+  
+  // CAMBIO 1: Ahora currentResults es un ARRAY (lista), no un objeto único
+  const [currentResults, setCurrentResults] = useState<TravelAnalysis[]>([]); 
+  
   const [database, setDatabase] = useState<AnalysisHistoryItem[]>([]);
   const [error, setError] = useState<string | null>(null);
   
@@ -47,40 +50,47 @@ const App: React.FC = () => {
     }
   };
 
-  // --- MANUAL UPLOAD HANDLER ---
+  // --- MANUAL UPLOAD HANDLER (MODIFICADO PARA LISTAS) ---
   const handleAnalyze = useCallback(async (source: File | string) => {
     setError(null);
-    setCurrentResult(null);
+    setCurrentResults([]); // Limpiamos resultados anteriores
     const identifier = typeof source === 'string' ? source : source.name;
 
-    // Check duplication against current loaded DB
-    const exists = database.some(item => item.fileName === identifier);
-    if (exists) {
-      setError(`⚠️ Duplicado Detectado: "${identifier}" ya existe en la base de datos.`);
-      setStatus(AnalysisStatus.ERROR);
-      return; 
-    }
+    // Check duplication (Opcional: podrías querer permitir re-analizar si trae más lugares)
+    // Por ahora lo dejamos pasar para probar la multi-extracción.
 
     setStatus(AnalysisStatus.PROCESSING);
 
     try {
-      const result = await analyzeTravelVideo(source);
-      const newItem: AnalysisHistoryItem = {
-        ...result,
-        id: crypto.randomUUID(),
-        timestamp: Date.now(),
-        fileName: identifier
-      };
+      // 1. Obtenemos la LISTA de resultados del Backend
+      const rawResults = await analyzeTravelVideo(source);
       
-      // Save to Cloud
-      const updatedDB = await SheetManager.saveRecord(newItem);
-      setDatabase(updatedDB);
+      // Aseguramos que sea un array (por si acaso el backend devuelve uno solo suelto)
+      const resultsArray = Array.isArray(rawResults) ? rawResults : [rawResults];
+
+      if (resultsArray.length === 0) {
+        throw new Error("La IA no detectó ningún lugar en el video.");
+      }
+
+      // 2. Preparamos los objetos para la base de datos (Backend ya trae IDs y Timestamps buenos)
+      const newItems: AnalysisHistoryItem[] = resultsArray.map(item => ({
+        ...item,
+        fileName: identifier // Asignamos el nombre del archivo/url a todos
+      }));
       
-      setCurrentResult(result);
+      // 3. Guardamos TODO el lote en la Nube
+      // Nota: SheetManager debe ser capaz de recibir un array, o el backend lo maneja.
+      // Como actualizamos el server.py para recibir listas en /api/history, esto funcionará.
+      await SheetManager.saveRecord(newItems);
+      
+      // 4. Actualizamos el estado local
+      setDatabase(prev => [...newItems, ...prev]); // Añadimos los nuevos arriba
+      setCurrentResults(newItems); // Mostramos las tarjetas nuevas
       setStatus(AnalysisStatus.SUCCESS);
+
     } catch (err: any) {
       console.error(err);
-      setError(err.message || "Ocurrió un error.");
+      setError(err.message || "Ocurrió un error en el análisis.");
       setStatus(AnalysisStatus.ERROR);
     }
   }, [database]);
@@ -88,17 +98,15 @@ const App: React.FC = () => {
   // --- AGENT AUTONOMOUS HANDLER ---
   const handleAgentStart = useCallback(async (tripDescription: string) => {
     setIsAgentRunning(true);
-    setAgentLogs([]); // Clear logs
+    setAgentLogs([]); 
     setError(null);
     addLog(`> INICIALIZANDO AGENTE para: "${tripDescription.substring(0, 30)}..."`);
 
     try {
-      // 1. Generate Strategy
       addLog("Generando estrategia de búsqueda con Gemini Pro...");
       const strategies = await generateSearchStrategy(tripDescription);
       addLog(`Estrategia Generada: ${strategies.length} misiones cargadas.`);
       
-      // 2. Execution Loop
       for (let i = 0; i < strategies.length; i++) {
         const query = strategies[i];
         const step = i + 1;
@@ -106,7 +114,7 @@ const App: React.FC = () => {
         addLog(`> [${step}/${strategies.length}] Ejecutando: "${query}"`);
         
         // Deduplication Check
-        const db = await SheetManager.loadData(); // Ensure we have latest for dedup check
+        const db = await SheetManager.loadData();
         const exists = db.some(item => item.fileName === `AGENT_QUERY: ${query}`);
 
         if (exists) {
@@ -115,38 +123,37 @@ const App: React.FC = () => {
         }
 
         try {
-           // Execute Step
            const result = await executeAutonomousStep(query);
            
-           addLog(`  Encontrado: ${result.placeName}`);
-           addLog(`  Veredicto: ${result.criticalVerdict}`);
-           
-           if (result.isTouristTrap) {
-             addLog(`  ⚠️ ADVERTENCIA: ¡Trampa Turística detectada!`);
-           } else {
-             addLog(`  ✅ ÉXITO: Recomendación válida.`);
-           }
+           // El agente suele devolver 1 resultado por query, pero por seguridad lo tratamos como array si hiciera falta
+           const resultArray = Array.isArray(result) ? result : [result];
 
-           // Save to Cloud
-           const newItem: AnalysisHistoryItem = {
-             ...result,
-             id: crypto.randomUUID(),
-             timestamp: Date.now(),
-             fileName: `AGENT_QUERY: ${query}` 
-           };
-           
-           await SheetManager.saveRecord(newItem);
-           setDatabase(prev => [newItem, ...prev]); // Optimistic update
+           for (const res of resultArray) {
+             addLog(`  Encontrado: ${res.placeName}`);
+             addLog(`  Veredicto: ${res.criticalVerdict}`);
+             
+             if (res.isTouristTrap) addLog(`  ⚠️ ADVERTENCIA: ¡Trampa Turística!`);
+             else addLog(`  ✅ ÉXITO: Recomendación válida.`);
+
+             const newItem: AnalysisHistoryItem = {
+               ...res,
+               id: crypto.randomUUID(),
+               timestamp: Date.now(),
+               fileName: `AGENT_QUERY: ${query}` 
+             };
+             
+             await SheetManager.saveRecord(newItem); // Guardamos uno por uno en modo agente
+             setDatabase(prev => [newItem, ...prev]); 
+           }
            
         } catch (stepErr) {
            addLog(`  ❌ ERROR en paso ${step}: ${stepErr}`);
         }
         
-        // Small delay to be polite to the API
         await new Promise(r => setTimeout(r, 1000));
       }
 
-      addLog("> MISIÓN COMPLETADA. Todas las estrategias ejecutadas.");
+      addLog("> MISIÓN COMPLETADA.");
 
     } catch (err: any) {
       addLog(`FALLO CRÍTICO: ${err.message}`);
@@ -176,7 +183,6 @@ const App: React.FC = () => {
           </div>
           
           <div className="flex items-center space-x-3">
-            {/* Force Sync Button */}
             <button
               onClick={handleForceSync}
               disabled={isSyncing}
@@ -189,10 +195,9 @@ const App: React.FC = () => {
               <svg className={`w-3 h-3 ${isSyncing ? 'animate-spin' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
               </svg>
-              <span>{isSyncing ? 'Sincronizando...' : 'Forzar Sync'}</span>
+              <span>{isSyncing ? 'Sync' : 'Forzar Sync'}</span>
             </button>
 
-            {/* Main Nav Tabs */}
             <div className="flex space-x-1 bg-slate-100 p-1 rounded-lg">
                <button 
                  onClick={() => setActiveMode('upload')}
@@ -214,7 +219,6 @@ const App: React.FC = () => {
       {/* Main Content */}
       <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-10">
         
-        {/* Conditional Input View */}
         <div className="mb-12">
           {activeMode === 'upload' ? (
              <VideoUploader onAnalyze={handleAnalyze} status={status} />
@@ -227,26 +231,32 @@ const App: React.FC = () => {
           )}
         </div>
 
-        {/* Global Error */}
         {error && (
           <div className="w-full max-w-2xl mx-auto mb-8 p-4 bg-amber-50 border border-amber-200 rounded-lg flex items-start text-amber-800 shadow-sm animate-fade-in">
             <span className="font-medium">{error}</span>
           </div>
         )}
 
-        {/* Single Result View (Only for Manual Upload) */}
-        {activeMode === 'upload' && currentResult && (
+        {/* CAMBIO 2: Renderizado de Múltiples Tarjetas */}
+        {activeMode === 'upload' && currentResults.length > 0 && (
           <div className="animate-fade-in-up mb-16">
-            <div className="flex items-center space-x-2 mb-4">
+            <div className="flex items-center space-x-2 mb-6">
               <span className="h-px flex-1 bg-slate-200"></span>
-              <span className="text-sm font-semibold text-slate-400 uppercase tracking-wider">Último Análisis</span>
+              <span className="text-sm font-bold text-primary-600 uppercase tracking-wider bg-primary-50 px-3 py-1 rounded-full border border-primary-100">
+                ✨ {currentResults.length} Lugares Detectados
+              </span>
               <span className="h-px flex-1 bg-slate-200"></span>
             </div>
-            <ResultCard data={currentResult} />
+            
+            {/* Grid de Tarjetas */}
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+              {currentResults.map((item) => (
+                <ResultCard key={item.id} data={item} />
+              ))}
+            </div>
           </div>
         )}
 
-        {/* Database Grid (Always Visible) */}
         <div className="relative">
            {isSyncing && (
              <div className="absolute inset-0 bg-white/50 z-10 flex items-start justify-center pt-20">
