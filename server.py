@@ -4,7 +4,7 @@ import json
 import glob
 import tempfile
 import uuid
-import requests  # NECESARIO PARA HABLAR CON MAPS
+import requests
 from flask import Flask, request, jsonify, send_from_directory
 from flask_cors import CORS
 import yt_dlp
@@ -16,7 +16,7 @@ from oauth2client.service_account import ServiceAccountCredentials
 # --- CONFIGURACIÓN ---
 load_dotenv()
 API_KEY = os.getenv("API_KEY")
-MAPS_API_KEY = os.getenv("GOOGLE_MAPS_API_KEY") # Nueva llave
+MAPS_API_KEY = os.getenv("GOOGLE_MAPS_API_KEY")
 
 # Gemini
 if not API_KEY: print("❌ ERROR: API_KEY not found.")
@@ -45,46 +45,35 @@ def get_db_connection():
         print(f"❌ Error Sheets: {e}")
         return None
 
-# --- NUEVA FUNCIÓN: VERIFICACIÓN CON GOOGLE MAPS ---
+# --- VERIFICACIÓN CON MAPS ---
 def verify_location_with_maps(place_name, location_hint):
-    if not MAPS_API_KEY:
-        print("⚠️ No hay MAPS_API_KEY configurada. Saltando verificación.")
-        return None
-
-    print(f"🗺️ Verificando en Maps: {place_name} ({location_hint})...")
+    if not MAPS_API_KEY: return None
+    print(f"🗺️ Verificando: {place_name}...")
     
-    # Usamos la API "Text Search (New)" de Google Maps
     url = "https://places.googleapis.com/v1/places:searchText"
     headers = {
         "Content-Type": "application/json",
         "X-Goog-Api-Key": MAPS_API_KEY,
         "X-Goog-FieldMask": "places.displayName,places.formattedAddress,places.id,places.location"
     }
-    
-    # Buscamos combinando el nombre y la pista de ubicación (ciudad/país)
     query = f"{place_name} {location_hint}"
     payload = {"textQuery": query}
 
     try:
         response = requests.post(url, headers=headers, json=payload)
         data = response.json()
-        
         if "places" in data and len(data["places"]) > 0:
-            best_match = data["places"][0] # Tomamos el mejor resultado
-            print(f"✅ Lugar encontrado: {best_match.get('displayName', {}).get('text')}")
+            best = data["places"][0]
+            print(f"✅ Encontrado: {best.get('displayName', {}).get('text')}")
             return {
-                "officialName": best_match.get("displayName", {}).get("text"),
-                "address": best_match.get("formattedAddress"),
-                "placeId": best_match.get("id"),
-                "lat": best_match.get("location", {}).get("latitude"),
-                "lng": best_match.get("location", {}).get("longitude")
+                "officialName": best.get("displayName", {}).get("text"),
+                "address": best.get("formattedAddress"),
+                "placeId": best.get("id"),
+                "lat": best.get("location", {}).get("latitude"),
+                "lng": best.get("location", {}).get("longitude")
             }
-        else:
-            print("❌ Maps no encontró este lugar.")
-            return None
-    except Exception as e:
-        print(f"⚠️ Error conectando con Maps: {e}")
-        return None
+    except: pass
+    return None
 
 # --- DESCARGA ---
 def download_video(url):
@@ -104,10 +93,9 @@ def download_video(url):
         files = glob.glob(os.path.join(temp_dir, 'video_*'))
         return files[0] if files else None
     except Exception as e:
-        print(f"❌ Error descarga: {e}")
         return None
 
-# --- ANÁLISIS ---
+# --- ANÁLISIS MULTI-LUGAR ---
 def analyze_with_gemini(video_path):
     print(f"📤 Subiendo a Gemini...")
     try:
@@ -116,29 +104,30 @@ def analyze_with_gemini(video_path):
             time.sleep(1)
             video_file = genai.get_file(video_file.name)
     except Exception as e:
-        raise Exception(f"Error subida Gemini: {e}")
+        raise Exception(f"Error Gemini: {e}")
 
-    print("🤖 Analizando con Gemini 2.5 Flash...")
-    try:
-        model = genai.GenerativeModel(model_name="gemini-2.5-flash")
-    except:
-        model = genai.GenerativeModel(model_name="gemini-pro")
+    print("🤖 Analizando múltiples lugares...")
+    try: model = genai.GenerativeModel(model_name="gemini-2.5-flash")
+    except: model = genai.GenerativeModel(model_name="gemini-pro")
     
+    # PROMPT ACTUALIZADO PARA LISTAS
     prompt = """
-    Analiza este video de viaje.
-    Responde ÚNICAMENTE con un JSON válido.
+    Analiza este video de viaje. Identifica TODOS los lugares turísticos o de interés mencionados.
     
-    INSTRUCCIONES DE IDIOMA:
-    1. Las CLAVES (keys) del JSON en INGLÉS.
-    2. Los VALORES en ESPAÑOL.
-
-    JSON Template:
+    Responde ÚNICAMENTE con un JSON Array (una lista de objetos).
+    Ejemplo: [ {"placeName": "A", ...}, {"placeName": "B", ...} ]
+    
+    INSTRUCCIONES:
+    1. Claves en INGLÉS. Valores en ESPAÑOL.
+    2. Si hay varios lugares, crea un objeto para cada uno.
+    
+    Plantilla de Objeto:
     {
       "category": "Lugar/Comida/Otro",
-      "placeName": "Nombre del lugar",
+      "placeName": "Nombre específico",
       "estimatedLocation": "Ciudad, País",
       "priceRange": "Precio estimado",
-      "summary": "Resumen en español",
+      "summary": "Resumen específico de ESTE lugar en español",
       "score": 5,
       "confidenceLevel": "Alto",
       "criticalVerdict": "Opinión crítica",
@@ -148,51 +137,49 @@ def analyze_with_gemini(video_path):
     
     response = model.generate_content([video_file, prompt], generation_config={"response_mime_type": "application/json"})
     
+    try: genai.delete_file(video_file.name)
+    except: pass
+
+    # Parseo Inteligente (Maneja Listas)
     clean_text = response.text.replace("```json", "").replace("```", "").strip()
     try:
         raw_data = json.loads(clean_text)
     except:
-        raw_data = {}
+        raw_data = []
 
-    if isinstance(raw_data, list): raw_data = raw_data[0] if len(raw_data) > 0 else {}
+    # Si Gemini devuelve un solo objeto por error, lo convertimos en lista
+    if isinstance(raw_data, dict): raw_data = [raw_data]
     
-    try: genai.delete_file(video_file.name)
-    except: pass
+    final_results = []
+    
+    # PROCESAMOS CADA LUGAR ENCONTRADO
+    for item in raw_data:
+        guessed_name = str(item.get("placeName") or "Desconocido")
+        guessed_loc = str(item.get("estimatedLocation") or "")
+        
+        # Verificación individual en Maps
+        maps_data = verify_location_with_maps(guessed_name, guessed_loc)
+        
+        final_name = maps_data["officialName"] if maps_data else guessed_name
+        final_loc = maps_data["address"] if maps_data else guessed_loc
 
-    # --- FASE DE VERIFICACIÓN (NUEVO) ---
-    # Aquí es donde Gemini deja de "adivinar" y Maps confirma la verdad
-    guessed_name = str(raw_data.get("placeName") or "")
-    guessed_location = str(raw_data.get("estimatedLocation") or "")
-    
-    maps_data = verify_location_with_maps(guessed_name, guessed_location)
-    
-    final_place_name = guessed_name
-    final_location = guessed_location
-    
-    # Si Maps encontró el lugar real, usamos sus datos oficiales
-    if maps_data:
-        final_place_name = maps_data["officialName"]
-        final_location = maps_data["address"]
-        # (Aquí podríamos guardar el ID y coordenadas en el futuro)
+        safe_record = {
+            "id": str(uuid.uuid4()),
+            "timestamp": int(time.time() * 1000),
+            "category": str(item.get("category") or "Otro"),
+            "placeName": final_name,
+            "estimatedLocation": final_loc,
+            "priceRange": str(item.get("priceRange") or "??"),
+            "summary": str(item.get("summary") or "Sin resumen"),
+            "score": item.get("score") or 0,
+            "confidenceLevel": str(item.get("confidenceLevel") or "Bajo"),
+            "criticalVerdict": str(item.get("criticalVerdict") or ""),
+            "isTouristTrap": bool(item.get("isTouristTrap")),
+            "fileName": "Video TikTok"
+        }
+        final_results.append(safe_record)
 
-    current_time = int(time.time() * 1000)
-    unique_id = str(uuid.uuid4())
-
-    safe_data = {
-        "id": unique_id,
-        "timestamp": current_time,
-        "category": str(raw_data.get("category") or "Otro"),
-        "placeName": final_place_name,         # Dato verificado (o adivinado si falló maps)
-        "estimatedLocation": final_location,   # Dato verificado
-        "priceRange": str(raw_data.get("priceRange") or "??"),
-        "summary": str(raw_data.get("summary") or "Sin resumen"),
-        "score": raw_data.get("score") or 0,
-        "confidenceLevel": str(raw_data.get("confidenceLevel") or "Bajo"),
-        "criticalVerdict": str(raw_data.get("criticalVerdict") or "Sin veredicto"),
-        "isTouristTrap": bool(raw_data.get("isTouristTrap")),
-        "fileName": "Video TikTok"
-    }
-    return safe_data
+    return final_results # Devuelve una LISTA
 
 # --- RUTAS ---
 @app.route('/analyze', methods=['POST'])
@@ -206,8 +193,13 @@ def analyze_video():
         video_path = download_video(url)
         if not video_path: return jsonify({"error": "Error descarga"}), 500
 
-        result = analyze_with_gemini(video_path)
-        return jsonify(result)
+        # Obtenemos la LISTA de resultados
+        results_list = analyze_with_gemini(video_path)
+        
+        # Devolvemos la lista completa al frontend
+        # NOTA: El frontend debe estar listo para recibir un Array
+        return jsonify(results_list)
+        
     except Exception as e:
         return jsonify({"error": str(e)}), 500
     finally:
@@ -219,54 +211,49 @@ def analyze_video():
 @app.route('/api/history', methods=['GET'])
 def get_history():
     sheet = get_db_connection()
-    raw_records = []
-    if sheet:
-        try: raw_records = sheet.get_all_records()
-        except: raw_records = LOCAL_DB
-    else: raw_records = LOCAL_DB
-
-    clean_records = []
-    for record in raw_records:
-        if not isinstance(record, dict): continue
-        safe_record = {
-            "id": str(record.get("id") or ""),
-            "timestamp": record.get("timestamp") or 0,
-            "placeName": str(record.get("placeName") or "Desconocido"),
-            "category": str(record.get("category") or "Otro"), 
-            "score": record.get("score") or 0,
-            "estimatedLocation": str(record.get("estimatedLocation") or ""),
-            "summary": str(record.get("summary") or ""),
-            "fileName": str(record.get("fileName") or ""),
-            "confidenceLevel": str(record.get("confidenceLevel") or "Bajo"),
-            "criticalVerdict": str(record.get("criticalVerdict") or "")
-        }
-        clean_records.append(safe_record)
-    return jsonify(clean_records)
+    try: raw = sheet.get_all_records() if sheet else LOCAL_DB
+    except: raw = LOCAL_DB
+    
+    # Limpieza básica
+    clean = []
+    for r in raw:
+        if isinstance(r, dict): clean.append(r)
+    return jsonify(clean)
 
 @app.route('/api/history', methods=['POST'])
 def save_history():
+    # Esta ruta ahora debe ser inteligente.
+    # El frontend puede mandar UN objeto o UNA LISTA de objetos.
     data = request.json
     sheet = get_db_connection()
-    if sheet:
-        try:
-            row = [
-                data.get('id'),
-                data.get('timestamp'),
-                data.get('placeName'),
-                data.get('category'),
-                data.get('score'),
-                data.get('estimatedLocation'),
-                data.get('summary'),
-                data.get('fileName')
-            ]
-            sheet.append_row(row)
-            return jsonify({"status": "saved"})
-        except Exception as e:
-            LOCAL_DB.append(data)
-            return jsonify({"status": "fallback"})
+    
+    items_to_save = []
+    if isinstance(data, list):
+        items_to_save = data
     else:
-        LOCAL_DB.append(data)
-        return jsonify({"status": "local"})
+        items_to_save = [data] # Convertimos el solitario en lista
+        
+    saved_count = 0
+    if sheet:
+        for item in items_to_save:
+            try:
+                row = [
+                    item.get('id'),
+                    item.get('timestamp'),
+                    item.get('placeName'),
+                    item.get('category'),
+                    item.get('score'),
+                    item.get('estimatedLocation'),
+                    item.get('summary'),
+                    item.get('fileName')
+                ]
+                sheet.append_row(row)
+                saved_count += 1
+            except: pass
+    else:
+        LOCAL_DB.extend(items_to_save)
+        
+    return jsonify({"status": "saved", "count": saved_count})
 
 @app.route('/health', methods=['GET'])
 def health_check(): return "OK", 200
