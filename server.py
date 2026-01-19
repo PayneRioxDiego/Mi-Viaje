@@ -20,67 +20,67 @@ load_dotenv()
 API_KEY = os.getenv("API_KEY")
 MAPS_API_KEY = os.getenv("GOOGLE_MAPS_API_KEY")
 
-print("🚀 INICIANDO SERVIDOR (NEXT-GEN MODELS)...", flush=True)
+print("🚀 INICIANDO SERVIDOR (MODO AUTO-DESCUBRIMIENTO)...", flush=True)
 
 if not API_KEY: 
     print("❌ FATAL: API_KEY no encontrada.", flush=True)
 else:
     try: 
         genai.configure(api_key=API_KEY)
-        print("✅ Gemini Configurado.", flush=True)
+        print("✅ Cliente Gemini inicializado.", flush=True)
     except Exception as e: 
         print(f"❌ Error Gemini Config: {e}", flush=True)
 
 app = Flask(__name__, static_folder='dist', static_url_path='')
 CORS(app)
 
-# --- SELECCIÓN DE MODELO INTELIGENTE (Basado en tu captura) ---
-def get_best_available_model():
-    """Busca específicamente los modelos Gemini 3 y 2.5 que tienes disponibles."""
-    print("🔍 Escaneando modelos en tu cuenta...", flush=True)
+# --- MAGIA: BUSCADOR DE MODELOS REALES ---
+def find_working_model():
+    """Pregunta a la API qué modelos sirven con ESTA clave."""
+    print("🔍 Escaneando modelos compatibles con tu clave...", flush=True)
     try:
-        available_models = []
-        for m in genai.list_models():
-            if 'generateContent' in m.supported_generation_methods:
-                available_models.append(m.name)
+        # Obtenemos la lista real que Google nos permite usar
+        models = list(genai.list_models())
+        viable_models = []
         
-        print(f"📋 Lista completa de modelos: {available_models}", flush=True)
+        for m in models:
+            if 'generateContent' in m.supported_generation_methods:
+                viable_models.append(m.name)
+        
+        print(f"📋 Modelos encontrados: {viable_models}", flush=True)
+        
+        # Filtramos por preferencia (Gratis > Pro)
+        # Buscamos cualquiera que tenga 'flash' (suele ser el gratis/rápido)
+        for m in viable_models:
+            if 'flash' in m.lower() and '1.5' in m:
+                print(f"🎯 Seleccionado Preferido: {m}", flush=True)
+                return m
+                
+        # Si no hay flash 1.5, probamos el 2.0 (experimental)
+        for m in viable_models:
+            if 'flash' in m.lower() and '2.0' in m:
+                print(f"🎯 Seleccionado Experimental: {m}", flush=True)
+                return m
 
-        # PRIORIDAD ABSOLUTA (Según tu imagen)
-        target_models = [
-            "models/gemini-3-flash-preview", # Lo más top
-            "models/gemini-3-pro-preview",
-            "models/gemini-2.5-flash",       # Tu preferencia actual
-            "models/gemini-2.5-pro",
-            "models/gemini-2.0-flash-exp",   # Alias técnico común para 2.5
-            "models/gemini-1.5-pro",         # Fallback aceptable
-            "models/gemini-1.5-flash"
-        ]
-
-        # 1. Búsqueda Exacta
-        for target in target_models:
-            if target in available_models:
-                print(f"🎯 MATCH EXACTO: {target}", flush=True)
-                return target
-
-        # 2. Búsqueda Parcial (Si la API usa nombres ligeramente distintos)
-        # Busca "gemini-3", luego "gemini-2.5", etc.
-        keywords = ["gemini-3", "gemini-2.5", "gemini-2.0", "gemini-1.5"]
-        for kw in keywords:
-            for av in available_models:
-                if kw in av:
-                    print(f"🎯 MATCH POR PALABRA CLAVE ({kw}): {av}", flush=True)
-                    return av
-
-        # 3. Último recurso: El primero que funcione
-        if available_models:
-            return available_models[0]
+        # Si no, el primero que funcione
+        if viable_models:
+            print(f"⚠️ Usando fallback: {viable_models[0]}", flush=True)
+            return viable_models[0]
             
     except Exception as e:
-        print(f"⚠️ Error listando modelos: {e}", flush=True)
+        print(f"❌ Error listando modelos: {e}", flush=True)
+        print("⚠️ Intentando forzar 'gemini-1.5-flash' a ciegas...", flush=True)
+        return "gemini-1.5-flash"
     
-    # Fallback ciego si list_models falla (Intentamos pegarle al 2.5 Flash directamente)
-    return "gemini-2.5-flash"
+    return "gemini-pro" # Último recurso
+
+# Guardamos el modelo elegido en una variable global
+ACTIVE_MODEL_NAME = "gemini-1.5-flash" # Valor inicial por defecto
+
+# Ejecutamos la búsqueda AL ARRANCAR para ver el log inmediato
+try:
+    ACTIVE_MODEL_NAME = find_working_model()
+except: pass
 
 # --- 1. GOOGLE SHEETS ---
 def get_db_connection():
@@ -95,30 +95,33 @@ def get_db_connection():
         return client.open_by_key(sheet_id).sheet1
     except: return None
 
-# --- 2. MAPS + FOTOS ---
+# --- 2. MAPS (MODO SEGURO - SIN COBRO) ---
 def verify_location_with_maps(place_name, location_hint):
     if not MAPS_API_KEY: return None
+    
     url = "https://places.googleapis.com/v1/places:searchText"
     headers = {
         "Content-Type": "application/json",
         "X-Goog-Api-Key": MAPS_API_KEY,
-        "X-Goog-FieldMask": "places.displayName,places.formattedAddress,places.id,places.location,places.photos,places.rating,places.userRatingCount,places.websiteUri,places.internationalPhoneNumber,places.googleMapsUri,places.regularOpeningHours"
+        "X-Goog-FieldMask": "places.displayName,places.formattedAddress,places.id,places.location,places.photos,places.rating,places.userRatingCount,places.websiteUri,places.googleMapsUri,places.regularOpeningHours"
     }
     query = f"{place_name} {location_hint}"
     payload = {"textQuery": query}
+    
     try:
         response = requests.post(url, headers=headers, json=payload, timeout=5)
+        # Si falla (403 Facturación), lo ignoramos silenciosamente
+        if response.status_code != 200: return None
+
         data = response.json()
         if "places" in data and len(data["places"]) > 0:
             best = data["places"][0]
             
-            # Foto
             photo_url = ""
             if "photos" in best and len(best["photos"]) > 0:
                 photo_ref = best["photos"][0]["name"]
-                photo_url = f"https://places.googleapis.com/v1/{photo_ref}/media?maxHeightPx=800&maxWidthPx=800&key={MAPS_API_KEY}"
-            
-            # Horario
+                photo_url = f"https://places.googleapis.com/v1/{photo_ref}/media?maxHeightPx=600&maxWidthPx=600&key={MAPS_API_KEY}"
+
             open_now = ""
             try:
                 is_open = best.get("regularOpeningHours", {}).get("openNow")
@@ -136,26 +139,18 @@ def verify_location_with_maps(place_name, location_hint):
                 "rating": best.get("rating", 0),
                 "reviews": best.get("userRatingCount", 0),
                 "website": best.get("websiteUri", ""),
-                "phone": best.get("internationalPhoneNumber", ""),
                 "mapsLink": best.get("googleMapsUri", ""),
-                "openNow": open_now
+                "openNow": open_now,
+                "phone": ""
             }
-    except Exception as e:
-        print(f"⚠️ Error Maps: {e}", flush=True)
-    return None
+    except: return None
 
 # --- 3. VIDEO ---
 def download_video(url):
     print(f"⬇️ Descargando: {url}", flush=True)
     temp_dir = tempfile.mkdtemp()
     output_template = os.path.join(temp_dir, f'video_{int(time.time())}.%(ext)s')
-    ydl_opts = {
-        'format': 'worst[ext=mp4]', 
-        'outtmpl': output_template,
-        'quiet': True, 'no_warnings': True, 'nocheckcertificate': True,
-        'user_agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 14_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/14.0 Mobile/15E148 Safari/604.1',
-        'http_headers': {'Referer': 'https://www.tiktok.com/'},
-    }
+    ydl_opts = { 'format': 'worst[ext=mp4]', 'outtmpl': output_template, 'quiet': True, 'no_warnings': True, 'nocheckcertificate': True }
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             ydl.download([url])
@@ -176,42 +171,36 @@ def analyze_with_gemini(video_path):
             time.sleep(1)
             video_file = genai.get_file(video_file.name)
         if video_file.state.name == "FAILED": raise Exception("Video rechazado")
-    except Exception as e: 
-        raise Exception(f"Error subiendo a Gemini: {e}")
+    except: raise Exception("Error subiendo video")
 
-    # --- SELECCIÓN DE MODELO ---
-    selected_model_name = get_best_available_model()
-    print(f"🤖 Usando Modelo: {selected_model_name}", flush=True)
+    print(f"🤖 Analizando con modelo activo: {ACTIVE_MODEL_NAME}...", flush=True)
     
     try:
-        model = genai.GenerativeModel(model_name=selected_model_name)
-    except Exception as e:
-        raise Exception(f"Fallo al iniciar {selected_model_name}: {e}")
+        model = genai.GenerativeModel(model_name=ACTIVE_MODEL_NAME)
+    except:
+        raise Exception(f"No se pudo cargar el modelo {ACTIVE_MODEL_NAME}")
 
     prompt = """
-    Analiza este video de viaje. Identifica TODOS los lugares mencionados.
-    OUTPUT FORMAT: JSON Array ONLY.
-    LANGUAGE: All text values MUST be in SPANISH.
+    Analiza este video de viaje. Identifica TODOS los lugares turísticos.
+    OUTPUT: JSON Array ONLY. NO Markdown.
+    LANGUAGE: SPANISH.
     
-    Required JSON Structure per item:
+    Structure:
     {
-      "category": "Comida / Alojamiento / Actividad",
-      "placeName": "Name of the place",
-      "estimatedLocation": "City, Country",
-      "priceRange": "Gratis / Barato / Moderado / Caro",
-      "summary": "Detailed summary in Spanish",
+      "category": "Comida/Alojamiento/Actividad",
+      "placeName": "Nombre",
+      "estimatedLocation": "Ciudad, Pais",
+      "priceRange": "Gratis/Barato/Moderado/Caro",
+      "summary": "Resumen en español",
       "score": 4.5,
       "confidenceLevel": "Alto",
-      "criticalVerdict": "Critical opinion in Spanish",
+      "criticalVerdict": "Opinion critica",
       "isTouristTrap": boolean
     }
     """
     
     try:
-        response = model.generate_content(
-            [video_file, prompt], 
-            generation_config={"response_mime_type": "application/json"}
-        )
+        response = model.generate_content([video_file, prompt], generation_config={"response_mime_type": "application/json"})
         clean = response.text.replace("```json", "").replace("```", "").strip()
         raw_data = json.loads(clean)
     except Exception as e:
@@ -255,7 +244,7 @@ def analyze_with_gemini(video_path):
             "website": maps["website"] if maps else "",
             "mapsLink": maps["mapsLink"] if maps else "",
             "openNow": maps["openNow"] if maps else "",
-            "phone": maps["phone"] if maps else ""
+            "phone": ""
         })
 
     return final_results
@@ -277,12 +266,18 @@ def analyze_video_route():
         return jsonify({"error": str(e)}), 500
     finally: gc.collect()
 
-@app.route('/api/history', methods=['GET'])
-def get_history():
-    sheet = get_db_connection()
-    try: raw = sheet.get_all_records() if sheet else []
-    except: raw = []
-    return jsonify([r for r in raw if isinstance(r, dict)])
+# --- SHEET CONNECTION ---
+def get_db_connection():
+    creds_json = os.getenv("GOOGLE_CREDENTIALS_JSON")
+    sheet_id = os.getenv("GOOGLE_SHEET_ID")
+    if not creds_json or not sheet_id: return None
+    try:
+        creds_dict = json.loads(creds_json)
+        SCOPES = ['https://www.googleapis.com/auth/spreadsheets', "https://www.googleapis.com/auth/drive"]
+        creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, SCOPES)
+        client = gspread.authorize(creds)
+        return client.open_by_key(sheet_id).sheet1
+    except: return None
 
 @app.route('/api/history', methods=['POST'])
 def save_history():
@@ -319,6 +314,13 @@ def save_history():
         if rows: sheet.append_rows(rows)
         return jsonify({"status": "saved"})
     except: return jsonify({"error": "save error"}), 500
+
+@app.route('/api/history', methods=['GET'])
+def get_history():
+    sheet = get_db_connection()
+    try: raw = sheet.get_all_records() if sheet else []
+    except: raw = []
+    return jsonify([r for r in raw if isinstance(r, dict)])
 
 @app.route('/', defaults={'path': ''})
 @app.route('/<path:path>')
