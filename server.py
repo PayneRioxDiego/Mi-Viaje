@@ -19,113 +19,117 @@ import urllib.parse
 # --- CONFIGURACIÓN ---
 load_dotenv()
 API_KEY = os.getenv("API_KEY")
-UNSPLASH_KEY = os.getenv("UNSPLASH_ACCESS_KEY") # Nueva clave para fotos gratis
+UNSPLASH_KEY = os.getenv("UNSPLASH_ACCESS_KEY") 
 
-print("🚀 INICIANDO MODO OPEN SOURCE (SIN TARJETA)...", flush=True)
+print("🚀 INICIANDO MODO NEXT-GEN (GEMINI 2.5 + OPEN SOURCE)...", flush=True)
 
 if not API_KEY: 
-    print("❌ FATAL: API_KEY (Gemini) no encontrada.", flush=True)
+    print("❌ FATAL: API_KEY no encontrada.", flush=True)
 else:
     try: 
         genai.configure(api_key=API_KEY)
-        print("✅ Gemini Configurado.", flush=True)
+        print("✅ Cliente Gemini configurado.", flush=True)
     except Exception as e: 
         print(f"❌ Error Gemini Config: {e}", flush=True)
 
 app = Flask(__name__, static_folder='dist', static_url_path='')
 CORS(app)
 
-# --- 1. SELECCIÓN DE MODELO GRATIS (AI STUDIO) ---
-def get_free_model():
-    candidates = ["gemini-1.5-flash", "gemini-1.5-flash-latest", "gemini-1.5-flash-001"]
-    for m in candidates:
-        try:
-            model = genai.GenerativeModel(model_name=m)
-            model.count_tokens("test")
-            return m
-        except: continue
-    return "gemini-pro"
+# --- 1. SELECCIÓN DE MODELO (PRIORIDAD: 2.5 FLASH) ---
+def get_best_model():
+    """Busca el mejor modelo disponible en tu cuenta (Prioridad: Flash 2.5)."""
+    print("🔍 Escaneando modelos disponibles...", flush=True)
+    
+    # 1. Lista de deseos (Orden de preferencia según tu captura)
+    wishlist = [
+        "gemini-2.5-flash",          # Tu favorito (Gratis/Rápido)
+        "gemini-2.5-flash-preview",  # Variante común
+        "gemini-2.5-flash-001",      # Variante técnica
+        "gemini-3-flash-preview",    # Siguiente generación
+        "gemini-2.0-flash-exp",      # Anterior experimental
+        "gemini-1.5-flash"           # Fallback clásico
+    ]
 
-# --- 2. SISTEMA DE FOTOS GRATIS (UNSPLASH) ---
+    try:
+        # Obtenemos la lista REAL de modelos que ve tu API Key
+        available_models = [m.name for m in genai.list_models()]
+        print(f"📋 Modelos reales detectados en tu cuenta: {available_models}", flush=True)
+
+        # Buscamos coincidencia
+        for target in wishlist:
+            # Buscamos si el nombre deseado está contenido en alguno de los disponibles
+            # (Ej: 'models/gemini-2.5-flash' contiene 'gemini-2.5-flash')
+            for real_model in available_models:
+                if target in real_model:
+                    print(f"✅ MATCH: Usando modelo {real_model}", flush=True)
+                    return real_model
+        
+        # Si ninguno de la lista está, usamos el PRIMERO que sirva para generar texto
+        print("⚠️ No se encontró modelo específico. Usando el primero disponible...", flush=True)
+        for m in genai.list_models():
+            if 'generateContent' in m.supported_generation_methods:
+                return m.name
+
+    except Exception as e:
+        print(f"❌ Error listando modelos: {e}", flush=True)
+    
+    # Fallback desesperado (A veces funciona aunque no salga en la lista)
+    return "gemini-2.5-flash"
+
+# --- 2. FOTOS GRATIS (UNSPLASH) ---
 def get_unsplash_photo(query):
     if not UNSPLASH_KEY: return ""
     try:
-        # Buscamos una foto vertical (portrait) o paisaje relacionada con el lugar
-        url = f"https://api.unsplash.com/search/photos?page=1&query={urllib.parse.quote(query)}&per_page=1&orientation=landscape&client_id={UNSPLASH_KEY}"
+        safe_query = urllib.parse.quote(query)
+        url = f"https://api.unsplash.com/search/photos?page=1&query={safe_query}&per_page=1&orientation=landscape&client_id={UNSPLASH_KEY}"
         res = requests.get(url, timeout=3)
-        data = res.json()
-        if "results" in data and len(data["results"]) > 0:
-            return data["results"][0]["urls"]["regular"]
+        if res.status_code == 200:
+            data = res.json()
+            if "results" in data and len(data["results"]) > 0:
+                return data["results"][0]["urls"]["regular"]
     except: pass
     return ""
 
-# --- 3. SISTEMA DE MAPAS GRATIS (OPENSTREETMAP) ---
+# --- 3. MAPAS GRATIS (NOMINATIM / OSM) ---
 def verify_location_opensource(place_name, location_hint):
-    # Nominatim es gratis y no requiere Key, pero pide un User-Agent
     search_query = f"{place_name} {location_hint}"
     url = "https://nominatim.openstreetmap.org/search"
-    
-    headers = {
-        'User-Agent': 'TravelHunterApp/1.0' # Requisito de cortesía de OSM
-    }
-    params = {
-        'q': search_query,
-        'format': 'json',
-        'limit': 1,
-        'addressdetails': 1
-    }
+    headers = { 'User-Agent': 'TravelHunterApp/2.0' }
+    params = { 'q': search_query, 'format': 'json', 'limit': 1 }
     
     try:
-        print(f"🌍 Buscando en OpenStreetMap: {search_query}...", flush=True)
+        print(f"🌍 Buscando en OSM: {search_query}...", flush=True)
         response = requests.get(url, params=params, headers=headers, timeout=5)
         data = response.json()
         
         if data and len(data) > 0:
             best = data[0]
-            display_name = best.get('display_name', '')
-            lat = best.get('lat')
-            lon = best.get('lon')
-            
-            # Generamos link de mapa abierto
-            maps_link = f"https://www.openstreetmap.org/?mlat={lat}&mlon={lon}#map=16/{lat}/{lon}"
-            # O link de Google Maps (funciona sin API key, solo como link)
-            google_link = f"https://www.google.com/maps/search/?api=1&query={lat},{lon}"
-
-            # Conseguimos foto temática de Unsplash
-            # Usamos el tipo de lugar o la ciudad para la foto
+            lat, lon = best.get('lat'), best.get('lon')
+            maps_link = f"https://www.google.com/maps/search/?api=1&query={lat},{lon}"
+            # Foto temática
             photo_keyword = f"{place_name} travel"
             photo_url = get_unsplash_photo(photo_keyword)
 
             return {
-                "officialName": place_name, # OSM a veces da direcciones muy largas, mejor mantener el nombre original
-                "address": display_name,
-                "placeId": str(best.get('place_id', '')),
-                "lat": lat,
-                "lng": lon,
+                "officialName": place_name, 
+                "address": best.get('display_name', location_hint),
+                "placeId": str(best.get('place_id', 'osm')),
+                "lat": lat, "lng": lon,
                 "photoUrl": photo_url,
-                "rating": 0, # OSM no tiene ratings
-                "reviews": 0,
-                "website": "", # Difícil de sacar de OSM
-                "mapsLink": google_link, # Usamos link de Google para comodidad del usuario
-                "openNow": "",
-                "phone": ""
+                "rating": 0, "reviews": 0, "website": "", 
+                "mapsLink": maps_link, "openNow": "", "phone": ""
             }
-    except Exception as e:
-        print(f"⚠️ Error OSM: {e}", flush=True)
+    except Exception as e: print(f"⚠️ Error OSM: {e}", flush=True)
     
-    # Si OSM falla, intentamos al menos conseguir una foto con el nombre
+    # Fallback solo foto
     photo_url = get_unsplash_photo(f"{place_name} {location_hint}")
     if photo_url:
          return {
-            "officialName": place_name,
-            "address": location_hint,
-            "placeId": "manual",
-            "lat": "", "lng": "",
-            "photoUrl": photo_url,
-            "rating": 0, "reviews": 0, "website": "", 
+            "officialName": place_name, "address": location_hint,
+            "placeId": "manual", "lat": "", "lng": "",
+            "photoUrl": photo_url, "rating": 0, "reviews": 0, "website": "", 
             "mapsLink": "", "openNow": "", "phone": ""
         }
-        
     return None
 
 # --- 4. VIDEO ---
@@ -156,31 +160,19 @@ def analyze_with_gemini(video_path):
         if video_file.state.name == "FAILED": raise Exception("Video rechazado")
     except: raise Exception("Error subiendo video")
 
-    active_model = get_free_model()
-    print(f"🤖 Analizando con {active_model}...", flush=True)
+    # AQUÍ ES DONDE ELEGIMOS TU MODELO 2.5
+    active_model = get_best_model()
+    print(f"🤖 INICIANDO ANÁLISIS CON: {active_model}", flush=True)
     
     try:
         model = genai.GenerativeModel(model_name=active_model)
-    except:
-        raise Exception("Error modelo.")
+    except: raise Exception(f"No se pudo cargar {active_model}")
 
     prompt = """
-    Analiza este video de viaje. Identifica TODOS los lugares turísticos mencionados.
+    Analiza este video de viaje. Identifica TODOS los lugares turísticos.
     OUTPUT: JSON Array ONLY. NO Markdown.
     LANGUAGE: SPANISH.
-    
-    Structure:
-    {
-      "category": "Comida/Alojamiento/Actividad",
-      "placeName": "Nombre",
-      "estimatedLocation": "Ciudad, Pais",
-      "priceRange": "Gratis/Barato/Moderado/Caro",
-      "summary": "Resumen en español",
-      "score": 4.5,
-      "confidenceLevel": "Alto",
-      "criticalVerdict": "Opinion critica",
-      "isTouristTrap": boolean
-    }
+    Structure: {"category": "...", "placeName": "...", "estimatedLocation": "...", "priceRange": "...", "summary": "...", "score": 4.5, "confidenceLevel": "...", "criticalVerdict": "...", "isTouristTrap": boolean}
     """
     
     try:
@@ -203,7 +195,7 @@ def analyze_with_gemini(video_path):
         guessed_name = str(item.get("placeName") or "Desconocido")
         guessed_loc = str(item.get("estimatedLocation") or "")
         
-        # --- AQUÍ USAMOS EL SISTEMA GRATIS ---
+        # MODO OPEN SOURCE
         opensource_data = verify_location_opensource(guessed_name, guessed_loc)
         
         if opensource_data:
@@ -217,8 +209,6 @@ def analyze_with_gemini(video_path):
             photo_url = ""
             maps_link = ""
 
-        combined_summary = str(item.get("summary") or "")
-
         final_results.append({
             "id": str(uuid.uuid4()),
             "timestamp": int(time.time() * 1000),
@@ -226,20 +216,15 @@ def analyze_with_gemini(video_path):
             "placeName": final_name,
             "estimatedLocation": final_loc,
             "priceRange": str(item.get("priceRange") or "??"),
-            "summary": combined_summary,
+            "summary": str(item.get("summary") or ""),
             "score": item.get("score") or 0,
             "confidenceLevel": str(item.get("confidenceLevel") or "Bajo"),
             "criticalVerdict": str(item.get("criticalVerdict") or ""),
             "isTouristTrap": bool(item.get("isTouristTrap")),
             "fileName": "Video TikTok",
-            # Datos Open Source
             "photoUrl": photo_url,
-            "realRating": 0, # No hay rating en OSM
-            "realReviews": 0,
-            "website": "",
-            "mapsLink": maps_link,
-            "openNow": "",
-            "phone": ""
+            "realRating": 0, "realReviews": 0, "website": "", 
+            "mapsLink": maps_link, "openNow": "", "phone": ""
         })
 
     return final_results
@@ -261,7 +246,7 @@ def analyze_video_route():
         return jsonify({"error": str(e)}), 500
     finally: gc.collect()
 
-# --- GOOGLE SHEETS (Esto es gratis, se mantiene) ---
+# --- DB ---
 def get_db_connection():
     creds_json = os.getenv("GOOGLE_CREDENTIALS_JSON")
     sheet_id = os.getenv("GOOGLE_SHEET_ID")
@@ -274,12 +259,18 @@ def get_db_connection():
         return client.open_by_key(sheet_id).sheet1
     except: return None
 
-@app.route('/api/history', methods=['POST'])
-def save_history():
+@app.route('/api/history', methods=['POST', 'GET'])
+def handle_history():
+    sheet = get_db_connection()
+    if request.method == 'GET':
+        try: raw = sheet.get_all_records() if sheet else []
+        except: raw = []
+        return jsonify([r for r in raw if isinstance(r, dict)])
+    
+    # POST
     try:
         new_items = request.json
         if not isinstance(new_items, list): new_items = [new_items]
-        sheet = get_db_connection()
         if not sheet: return jsonify({"status": "local"})
 
         try: existing = sheet.get_all_records()
@@ -291,31 +282,21 @@ def save_history():
             name = str(item.get('placeName', '')).strip()
             key = name.lower()
             photo = item.get('photoUrl') or ""
-            
             if key in name_map:
                 try:
                     idx = name_map[key]
                     sheet.update_cell(idx, 5, item.get('score'))
-                    sheet.update_cell(idx, 7, str(item.get('summary'))[:4500])
                     if photo: sheet.update_cell(idx, 9, photo)
                 except: pass
             else:
                 rows.append([
                     item.get('id'), item.get('timestamp'), name, item.get('category'), 
                     item.get('score'), item.get('estimatedLocation'), item.get('summary'), 
-                    item.get('fileName'), photo, item.get('mapsLink'), 
-                    item.get('website'), item.get('realRating')
+                    item.get('fileName'), photo, item.get('mapsLink'), "", 0
                 ])
         if rows: sheet.append_rows(rows)
         return jsonify({"status": "saved"})
     except: return jsonify({"error": "save error"}), 500
-
-@app.route('/api/history', methods=['GET'])
-def get_history():
-    sheet = get_db_connection()
-    try: raw = sheet.get_all_records() if sheet else []
-    except: raw = []
-    return jsonify([r for r in raw if isinstance(r, dict)])
 
 @app.route('/', defaults={'path': ''})
 @app.route('/<path:path>')
