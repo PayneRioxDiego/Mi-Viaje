@@ -42,9 +42,8 @@ def find_best_model():
             if 'generateContent' in m.supported_generation_methods:
                 available_models.append(m.name)
         
-        # Preferencia de modelos (De mejor a peor)
         preferred_order = [
-            'models/gemini-2.0-flash-exp', # Lo más nuevo (a veces llamado 2.5)
+            'models/gemini-2.0-flash-exp', 
             'models/gemini-1.5-pro-latest', 
             'models/gemini-1.5-flash-latest',
             'models/gemini-1.5-flash',
@@ -81,14 +80,16 @@ def get_db_connection():
         print(f"❌ Error Sheets: {e}")
         return None
 
-# --- 2. MAPS ---
+# --- 2. MAPS + FOTOS (NUEVO) ---
 def verify_location_with_maps(place_name, location_hint):
     if not MAPS_API_KEY: return None
     url = "https://places.googleapis.com/v1/places:searchText"
+    
+    # PEDIMOS EL CAMPO 'photos' TAMBIÉN
     headers = {
         "Content-Type": "application/json",
         "X-Goog-Api-Key": MAPS_API_KEY,
-        "X-Goog-FieldMask": "places.displayName,places.formattedAddress,places.id,places.location"
+        "X-Goog-FieldMask": "places.displayName,places.formattedAddress,places.id,places.location,places.photos"
     }
     query = f"{place_name} {location_hint}"
     payload = {"textQuery": query}
@@ -97,41 +98,43 @@ def verify_location_with_maps(place_name, location_hint):
         data = response.json()
         if "places" in data and len(data["places"]) > 0:
             best = data["places"][0]
+            
+            # PROCESAMOS LA FOTO
+            photo_url = ""
+            if "photos" in best and len(best["photos"]) > 0:
+                photo_ref = best["photos"][0]["name"] # formato: places/PLACE_ID/photos/PHOTO_ID
+                # Construimos la URL pública de la foto
+                photo_url = f"https://places.googleapis.com/v1/{photo_ref}/media?maxHeightPx=400&maxWidthPx=400&key={MAPS_API_KEY}"
+
             return {
                 "officialName": best.get("displayName", {}).get("text"),
                 "address": best.get("formattedAddress"),
                 "placeId": best.get("id"),
                 "lat": best.get("location", {}).get("latitude"),
-                "lng": best.get("location", {}).get("longitude")
+                "lng": best.get("location", {}).get("longitude"),
+                "photoUrl": photo_url # <--- NUEVO CAMPO
             }
     except: pass
     return None
 
-# --- 3. DETECTIVE (FORZADO A ESPAÑOL) ---
+# --- 3. DETECTIVE ---
 def check_reputation_with_google(place_name, location):
     print(f"🕵️‍♂️ Investigando: {place_name}...")
     try:
         model = genai.GenerativeModel(ACTIVE_MODEL_NAME)
-        
-        # PROMPT MODIFICADO: ORDEN ESTRICTA DE IDIOMA
         prompt = f"""
         Busca en Google: "{place_name}" "{location}" reviews tourist trap scam.
-        Analiza los resultados.
-        Responde ÚNICAMENTE en ESPAÑOL.
-        Si encuentras advertencias de estafa, descríbelas en 1 frase en ESPAÑOL.
+        Analiza los resultados. Responde ÚNICAMENTE en ESPAÑOL.
+        Si encuentras advertencias de estafa, descríbelas en 1 frase.
         Si es seguro, responde "OK".
         """
-        
         try:
             response = model.generate_content(prompt, tools='google_search_retrieval')
             verdict = response.text.strip()
             if "OK" in verdict or not verdict: return ""
             return verdict
-        except Exception as e:
-            return "" 
-
-    except Exception as e:
-        return ""
+        except: return "" 
+    except: return ""
 
 # --- 4. VIDEO ---
 def download_video(url):
@@ -153,7 +156,7 @@ def download_video(url):
         return files[0] if files else None
     except: return None
 
-# --- 5. ANÁLISIS (FORZADO A ESPAÑOL) ---
+# --- 5. ANÁLISIS ---
 def analyze_with_gemini(video_path):
     print(f"📤 Subiendo video...")
     video_file = None
@@ -165,30 +168,23 @@ def analyze_with_gemini(video_path):
     except Exception as e: raise Exception(f"Error Upload: {e}")
 
     print(f"🤖 Analizando con: {ACTIVE_MODEL_NAME}")
-    
-    try: 
-        model = genai.GenerativeModel(model_name=ACTIVE_MODEL_NAME)
-    except:
-        model = genai.GenerativeModel(model_name="gemini-pro")
+    try: model = genai.GenerativeModel(model_name=ACTIVE_MODEL_NAME)
+    except: model = genai.GenerativeModel(model_name="gemini-pro")
 
-    # PROMPT MODIFICADO: ORDEN ESTRICTA DE IDIOMA
     prompt = """
     Analiza este video. Identifica TODOS los lugares turísticos.
-    
-    CRITICAL INSTRUCTION: All text values MUST be in SPANISH.
-    INSTRUCCIÓN CRÍTICA: Todos los valores de texto (resumen, opinion, nombre) DEBEN ser en ESPAÑOL.
-    
+    CRITICAL: All text values MUST be in SPANISH.
     Responde ÚNICAMENTE con JSON Array.
     Plantilla:
     [{
       "category": "Lugar / Comida / Alojamiento",
-      "placeName": "Nombre del lugar",
+      "placeName": "Nombre",
       "estimatedLocation": "Ciudad, País",
       "priceRange": "Gratis / Barato / Caro",
-      "summary": "Resumen detallado en ESPAÑOL de lo que dice el video",
+      "summary": "Resumen en ESPAÑOL",
       "score": 5,
       "confidenceLevel": "Alto",
-      "criticalVerdict": "Opinión crítica en ESPAÑOL",
+      "criticalVerdict": "Opinión en ESPAÑOL",
       "isTouristTrap": false
     }]
     """
@@ -197,9 +193,7 @@ def analyze_with_gemini(video_path):
         response = model.generate_content([video_file, prompt], generation_config={"response_mime_type": "application/json"})
         clean_text = response.text.replace("```json", "").replace("```", "").strip()
         raw_data = json.loads(clean_text)
-    except Exception as e:
-        print(f"❌ Error Generación AI: {e}")
-        raw_data = []
+    except: raw_data = []
     
     try: 
         if video_file: genai.delete_file(video_file.name)
@@ -214,10 +208,11 @@ def analyze_with_gemini(video_path):
         guessed_loc = str(item.get("estimatedLocation") or "")
         
         maps_data = verify_location_with_maps(guessed_name, guessed_loc)
+        
         final_name = maps_data["officialName"] if maps_data else guessed_name
         final_loc = maps_data["address"] if maps_data else guessed_loc
+        photo_url = maps_data["photoUrl"] if maps_data else "" # <--- CAPTURAMOS LA FOTO
 
-        # Detective
         web_verdict = ""
         is_trap_confirmed = False
         if final_name != "Desconocido":
@@ -240,6 +235,7 @@ def analyze_with_gemini(video_path):
             "confidenceLevel": str(item.get("confidenceLevel") or "Bajo"),
             "criticalVerdict": str(item.get("criticalVerdict") or ""),
             "isTouristTrap": is_trap_confirmed or bool(item.get("isTouristTrap")),
+            "photoUrl": photo_url, # <--- ENVIAMOS AL FRONTEND
             "fileName": "Video TikTok"
         })
 
@@ -284,18 +280,27 @@ def save_history():
         for item in new_items:
             name = str(item.get('placeName', '')).strip()
             key = name.lower()
+            photo = item.get('photoUrl') or "" # Capturamos foto
+
             if key in name_map:
                 try:
                     row_idx = name_map[key]
                     sheet.update_cell(row_idx, 5, item.get('score'))
-                    # Solo actualizamos el resumen si es diferente para ahorrar tiempo
                     sheet.update_cell(row_idx, 7, str(item.get('summary'))[:4500])
+                    # Si antes no tenía foto y ahora sí, la actualizamos
+                    if photo: sheet.update_cell(row_idx, 9, photo) # Asumiendo Col 9 es Foto
                 except: pass
             else:
                 rows_to_create.append([
-                    item.get('id'), item.get('timestamp'), name,
-                    item.get('category'), item.get('score'), item.get('estimatedLocation'),
-                    item.get('summary'), item.get('fileName')
+                    item.get('id'), 
+                    item.get('timestamp'), 
+                    name,
+                    item.get('category'), 
+                    item.get('score'), 
+                    item.get('estimatedLocation'),
+                    item.get('summary'), 
+                    item.get('fileName'),
+                    photo # <--- AÑADIMOS LA FOTO AL EXCEL (Nueva Columna)
                 ])
 
         if rows_to_create:
