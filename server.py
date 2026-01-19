@@ -15,12 +15,12 @@ from dotenv import load_dotenv
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
 
-# --- CONFIGURACIÓN E INICIO ---
+# --- CONFIGURACIÓN ---
 load_dotenv()
 API_KEY = os.getenv("API_KEY")
 MAPS_API_KEY = os.getenv("GOOGLE_MAPS_API_KEY")
 
-print("🚀 INICIANDO SERVIDOR PREMIUM...", flush=True)
+print("🚀 INICIANDO SERVIDOR (NEXT-GEN MODELS)...", flush=True)
 
 if not API_KEY: 
     print("❌ FATAL: API_KEY no encontrada.", flush=True)
@@ -34,7 +34,55 @@ else:
 app = Flask(__name__, static_folder='dist', static_url_path='')
 CORS(app)
 
-# --- 1. GOOGLE SHEETS (BASE DE DATOS) ---
+# --- SELECCIÓN DE MODELO INTELIGENTE (Basado en tu captura) ---
+def get_best_available_model():
+    """Busca específicamente los modelos Gemini 3 y 2.5 que tienes disponibles."""
+    print("🔍 Escaneando modelos en tu cuenta...", flush=True)
+    try:
+        available_models = []
+        for m in genai.list_models():
+            if 'generateContent' in m.supported_generation_methods:
+                available_models.append(m.name)
+        
+        print(f"📋 Lista completa de modelos: {available_models}", flush=True)
+
+        # PRIORIDAD ABSOLUTA (Según tu imagen)
+        target_models = [
+            "models/gemini-3-flash-preview", # Lo más top
+            "models/gemini-3-pro-preview",
+            "models/gemini-2.5-flash",       # Tu preferencia actual
+            "models/gemini-2.5-pro",
+            "models/gemini-2.0-flash-exp",   # Alias técnico común para 2.5
+            "models/gemini-1.5-pro",         # Fallback aceptable
+            "models/gemini-1.5-flash"
+        ]
+
+        # 1. Búsqueda Exacta
+        for target in target_models:
+            if target in available_models:
+                print(f"🎯 MATCH EXACTO: {target}", flush=True)
+                return target
+
+        # 2. Búsqueda Parcial (Si la API usa nombres ligeramente distintos)
+        # Busca "gemini-3", luego "gemini-2.5", etc.
+        keywords = ["gemini-3", "gemini-2.5", "gemini-2.0", "gemini-1.5"]
+        for kw in keywords:
+            for av in available_models:
+                if kw in av:
+                    print(f"🎯 MATCH POR PALABRA CLAVE ({kw}): {av}", flush=True)
+                    return av
+
+        # 3. Último recurso: El primero que funcione
+        if available_models:
+            return available_models[0]
+            
+    except Exception as e:
+        print(f"⚠️ Error listando modelos: {e}", flush=True)
+    
+    # Fallback ciego si list_models falla (Intentamos pegarle al 2.5 Flash directamente)
+    return "gemini-2.5-flash"
+
+# --- 1. GOOGLE SHEETS ---
 def get_db_connection():
     creds_json = os.getenv("GOOGLE_CREDENTIALS_JSON")
     sheet_id = os.getenv("GOOGLE_SHEET_ID")
@@ -47,42 +95,34 @@ def get_db_connection():
         return client.open_by_key(sheet_id).sheet1
     except: return None
 
-# --- 2. GOOGLE MAPS (MOTOR DE DATOS VISUALES) ---
+# --- 2. MAPS + FOTOS ---
 def verify_location_with_maps(place_name, location_hint):
     if not MAPS_API_KEY: return None
-    
-    # Endpoint de Búsqueda de Texto (New Places API)
     url = "https://places.googleapis.com/v1/places:searchText"
-    
-    # Pedimos TODOS los datos necesarios para el frontend
     headers = {
         "Content-Type": "application/json",
         "X-Goog-Api-Key": MAPS_API_KEY,
         "X-Goog-FieldMask": "places.displayName,places.formattedAddress,places.id,places.location,places.photos,places.rating,places.userRatingCount,places.websiteUri,places.internationalPhoneNumber,places.googleMapsUri,places.regularOpeningHours"
     }
-    
     query = f"{place_name} {location_hint}"
     payload = {"textQuery": query}
-    
     try:
         response = requests.post(url, headers=headers, json=payload, timeout=5)
         data = response.json()
-        
         if "places" in data and len(data["places"]) > 0:
             best = data["places"][0]
             
-            # 1. Procesar FOTO (Pedimos alta resolución para el diseño nuevo)
+            # Foto
             photo_url = ""
             if "photos" in best and len(best["photos"]) > 0:
                 photo_ref = best["photos"][0]["name"]
-                # Max width 800px para que se vea nítida en la tarjeta grande
                 photo_url = f"https://places.googleapis.com/v1/{photo_ref}/media?maxHeightPx=800&maxWidthPx=800&key={MAPS_API_KEY}"
-
-            # 2. Procesar Horario
+            
+            # Horario
             open_now = ""
             try:
-                is_open = best.get("regularOpeningHours", {}).get("openNow", None)
-                if is_open is True: open_now = "Abierto Ahora"
+                is_open = best.get("regularOpeningHours", {}).get("openNow")
+                if is_open is True: open_now = "Abierto"
                 elif is_open is False: open_now = "Cerrado"
             except: pass
 
@@ -92,7 +132,6 @@ def verify_location_with_maps(place_name, location_hint):
                 "placeId": best.get("id"),
                 "lat": best.get("location", {}).get("latitude"),
                 "lng": best.get("location", {}).get("longitude"),
-                # Datos Ricos
                 "photoUrl": photo_url,
                 "rating": best.get("rating", 0),
                 "reviews": best.get("userRatingCount", 0),
@@ -102,16 +141,10 @@ def verify_location_with_maps(place_name, location_hint):
                 "openNow": open_now
             }
     except Exception as e:
-        print(f"⚠️ Error leve en Maps: {e}", flush=True)
+        print(f"⚠️ Error Maps: {e}", flush=True)
     return None
 
-# --- 3. DETECTIVE DE ESTAFAS (Opcional) ---
-def check_reputation_with_google(place_name, location):
-    # Saltamos búsqueda web compleja por ahora para priorizar velocidad y estabilidad
-    # Si quieres reactivarlo, avísame y lo descomentamos
-    return "" 
-
-# --- 4. GESTOR DE VIDEO (YT-DLP) ---
+# --- 3. VIDEO ---
 def download_video(url):
     print(f"⬇️ Descargando: {url}", flush=True)
     temp_dir = tempfile.mkdtemp()
@@ -133,7 +166,7 @@ def download_video(url):
         print(f"❌ Error descarga: {e}", flush=True)
         return None
 
-# --- 5. CEREBRO IA (GEMINI 1.5) ---
+# --- 4. ANÁLISIS ---
 def analyze_with_gemini(video_path):
     print(f"📤 Subiendo video...", flush=True)
     video_file = None
@@ -142,30 +175,23 @@ def analyze_with_gemini(video_path):
         while video_file.state.name == "PROCESSING":
             time.sleep(1)
             video_file = genai.get_file(video_file.name)
+        if video_file.state.name == "FAILED": raise Exception("Video rechazado")
     except Exception as e: 
         raise Exception(f"Error subiendo a Gemini: {e}")
 
-    print("🤖 Analizando...", flush=True)
+    # --- SELECCIÓN DE MODELO ---
+    selected_model_name = get_best_available_model()
+    print(f"🤖 Usando Modelo: {selected_model_name}", flush=True)
     
-    # LISTA DE MODELOS (Prioridad: Flash -> Pro)
-    # Evitamos 'gemini-pro' (v1.0) porque no soporta bien JSON Schema
-    models = ["gemini-1.5-flash", "gemini-1.5-flash-latest", "gemini-1.5-pro"]
-    model = None
-    
-    for m in models:
-        try:
-            model = genai.GenerativeModel(model_name=m)
-            break 
-        except: continue
-            
-    if not model: raise Exception("No se pudo iniciar ningún modelo Gemini 1.5")
+    try:
+        model = genai.GenerativeModel(model_name=selected_model_name)
+    except Exception as e:
+        raise Exception(f"Fallo al iniciar {selected_model_name}: {e}")
 
-    # Prompt estricto para JSON y Español
     prompt = """
-    Analiza este video de viaje. Identifica TODOS los lugares, restaurantes o alojamientos mencionados.
-    
-    OUTPUT FORMAT: JSON Array ONLY. Do not include markdown formatting (```json).
-    LANGUAGE: All text values (summary, criticalVerdict, placeName) MUST be in SPANISH.
+    Analiza este video de viaje. Identifica TODOS los lugares mencionados.
+    OUTPUT FORMAT: JSON Array ONLY.
+    LANGUAGE: All text values MUST be in SPANISH.
     
     Required JSON Structure per item:
     {
@@ -176,7 +202,7 @@ def analyze_with_gemini(video_path):
       "summary": "Detailed summary in Spanish",
       "score": 4.5,
       "confidenceLevel": "Alto",
-      "criticalVerdict": "Critical opinion in Spanish (e.g. 'Trampa turística')",
+      "criticalVerdict": "Critical opinion in Spanish",
       "isTouristTrap": boolean
     }
     """
@@ -192,7 +218,6 @@ def analyze_with_gemini(video_path):
         print(f"❌ Error Generación IA: {e}", flush=True)
         raw_data = []
     
-    # Limpieza
     try: 
         if video_file: genai.delete_file(video_file.name)
     except: pass
@@ -201,22 +226,15 @@ def analyze_with_gemini(video_path):
     if isinstance(raw_data, dict): raw_data = [raw_data]
     final_results = []
     
-    # Enriquecimiento con Maps
     for item in raw_data:
         guessed_name = str(item.get("placeName") or "Desconocido")
         guessed_loc = str(item.get("estimatedLocation") or "")
         
         maps = verify_location_with_maps(guessed_name, guessed_loc)
         
-        # Prioridad a datos de Maps, fallback a IA
         final_name = maps["officialName"] if maps else guessed_name
         final_loc = maps["address"] if maps else guessed_loc
-        
-        # Detective Web (Opcional, desactivado por ahora)
-        web_verdict = "" 
-        
         combined_summary = str(item.get("summary") or "")
-        if web_verdict: combined_summary += f"\n\n[🕵️‍♂️ Web]: {web_verdict}"
 
         final_results.append({
             "id": str(uuid.uuid4()),
@@ -231,7 +249,6 @@ def analyze_with_gemini(video_path):
             "criticalVerdict": str(item.get("criticalVerdict") or ""),
             "isTouristTrap": bool(item.get("isTouristTrap")),
             "fileName": "Video TikTok",
-            # DATOS VISUALES (PREMIUM)
             "photoUrl": maps["photoUrl"] if maps else "",
             "realRating": maps["rating"] if maps else 0,
             "realReviews": maps["reviews"] if maps else 0,
@@ -251,10 +268,8 @@ def analyze_video_route():
         if isinstance(data, list): data = data[0]
         url = data.get('url')
         if not url: return jsonify({"error": "No URL"}), 400
-        
         video_path = download_video(url)
         if not video_path: return jsonify({"error": "Error descarga"}), 500
-        
         results = analyze_with_gemini(video_path)
         return jsonify(results) 
     except Exception as e:
@@ -269,7 +284,6 @@ def get_history():
     except: raw = []
     return jsonify([r for r in raw if isinstance(r, dict)])
 
-# --- GUARDADO EN LOTE (MÁXIMO RENDIMIENTO) ---
 @app.route('/api/history', methods=['POST'])
 def save_history():
     try:
@@ -280,54 +294,31 @@ def save_history():
 
         try: existing = sheet.get_all_records()
         except: existing = []
-        
         name_map = {str(r.get('placeName', '')).strip().lower(): i+2 for i, r in enumerate(existing)}
-        rows_to_create = []
+        rows = []
 
         for item in new_items:
             name = str(item.get('placeName', '')).strip()
             key = name.lower()
-            
-            # Datos a guardar
             photo = item.get('photoUrl') or ""
-            maps_link = item.get('mapsLink') or ""
-            website = item.get('website') or ""
-            rating = item.get('realRating') or 0
-
+            
             if key in name_map:
                 try:
-                    # Update inteligente: Solo actualiza si falta info o cambió el score
-                    row_idx = name_map[key]
-                    sheet.update_cell(row_idx, 5, item.get('score')) # Score
-                    sheet.update_cell(row_idx, 7, str(item.get('summary'))[:4500]) # Resumen
-                    if photo: sheet.update_cell(row_idx, 9, photo) # Col 9: Foto
+                    idx = name_map[key]
+                    sheet.update_cell(idx, 5, item.get('score'))
+                    sheet.update_cell(idx, 7, str(item.get('summary'))[:4500])
+                    if photo: sheet.update_cell(idx, 9, photo)
                 except: pass
             else:
-                rows_to_create.append([
-                    item.get('id'), 
-                    item.get('timestamp'), 
-                    name,
-                    item.get('category'), 
-                    item.get('score'), 
-                    item.get('estimatedLocation'),
-                    item.get('summary'), 
-                    item.get('fileName'),
-                    photo,       # Col 9
-                    maps_link,   # Col 10
-                    website,     # Col 11
-                    rating       # Col 12
+                rows.append([
+                    item.get('id'), item.get('timestamp'), name, item.get('category'), 
+                    item.get('score'), item.get('estimatedLocation'), item.get('summary'), 
+                    item.get('fileName'), photo, item.get('mapsLink'), 
+                    item.get('website'), item.get('realRating')
                 ])
-
-        if rows_to_create:
-            try: sheet.append_rows(rows_to_create)
-            except: pass
-
-        return jsonify({"status": "saved", "created": len(rows_to_create)})
-
-    except Exception as e: return jsonify({"error": str(e)}), 500
-
-@app.route('/health', methods=['GET'])
-def health_check(): return "OK", 200
+        if rows: sheet.append_rows(rows)
+        return jsonify({"status": "saved"})
+    except: return jsonify({"error": "save error"}), 500
 
 @app.route('/', defaults={'path': ''})
 @app.route('/<path:path>')
