@@ -5,6 +5,7 @@ import glob
 import tempfile
 import uuid
 import requests
+import gc
 from flask import Flask, request, jsonify, send_from_directory
 from flask_cors import CORS
 import yt_dlp
@@ -18,19 +19,19 @@ load_dotenv()
 API_KEY = os.getenv("API_KEY")
 MAPS_API_KEY = os.getenv("GOOGLE_MAPS_API_KEY")
 
-# Gemini
+# Configuración Gemini
 if not API_KEY: print("❌ ERROR: API_KEY not found.")
 try: genai.configure(api_key=API_KEY)
 except Exception as e: print(f"❌ Error Gemini: {e}")
 
-# Flask
+# Configuración Flask
 app = Flask(__name__, static_folder='dist', static_url_path='')
 CORS(app)
 
-# Memoria Local
+# Memoria Local (Respaldo por si falla Sheets)
 LOCAL_DB = []
 
-# --- GOOGLE SHEETS ---
+# --- 1. CONEXIÓN A GOOGLE SHEETS ---
 def get_db_connection():
     creds_json = os.getenv("GOOGLE_CREDENTIALS_JSON")
     sheet_id = os.getenv("GOOGLE_SHEET_ID")
@@ -45,10 +46,25 @@ def get_db_connection():
         print(f"❌ Error Sheets: {e}")
         return None
 
-# --- VERIFICACIÓN CON MAPS ---
+# --- 2. UTILIDAD DE REINTENTOS (Para evitar Error 500) ---
+def retry_operation(func, max_retries=3, delay=2):
+    """Intenta ejecutar una función varias veces antes de rendirse."""
+    last_exception = None
+    for i in range(max_retries):
+        try:
+            func()
+            return True # ¡Éxito!
+        except Exception as e:
+            last_exception = e
+            print(f"⚠️ Intento {i+1}/{max_retries} falló. Esperando {delay}s...")
+            time.sleep(delay)
+            delay *= 2 # Espera exponencial
+    print(f"❌ Error definitivo: {last_exception}")
+    return False
+
+# --- 3. VERIFICACIÓN CON GOOGLE MAPS ---
 def verify_location_with_maps(place_name, location_hint):
     if not MAPS_API_KEY: return None
-    print(f"🗺️ Verificando: {place_name}...")
     
     url = "https://places.googleapis.com/v1/places:searchText"
     headers = {
@@ -60,11 +76,11 @@ def verify_location_with_maps(place_name, location_hint):
     payload = {"textQuery": query}
 
     try:
-        response = requests.post(url, headers=headers, json=payload)
+        response = requests.post(url, headers=headers, json=payload, timeout=5)
         data = response.json()
         if "places" in data and len(data["places"]) > 0:
             best = data["places"][0]
-            print(f"✅ Encontrado: {best.get('displayName', {}).get('text')}")
+            print(f"✅ Maps encontró: {best.get('displayName', {}).get('text')}")
             return {
                 "officialName": best.get("displayName", {}).get("text"),
                 "address": best.get("formattedAddress"),
@@ -75,15 +91,18 @@ def verify_location_with_maps(place_name, location_hint):
     except: pass
     return None
 
-# --- DESCARGA ---
+# --- 4. DESCARGA DE VIDEO (Optimizada RAM) ---
 def download_video(url):
     print(f"⬇️ Descargando: {url}")
     temp_dir = tempfile.mkdtemp()
     output_template = os.path.join(temp_dir, f'video_{int(time.time())}.%(ext)s')
+    
     ydl_opts = {
-        'format': 'worst[ext=mp4]', 
+        'format': 'worst[ext=mp4]', # Baja calidad para ahorrar RAM
         'outtmpl': output_template,
-        'quiet': True, 'no_warnings': True, 'nocheckcertificate': True,
+        'quiet': True, 
+        'no_warnings': True, 
+        'nocheckcertificate': True,
         'user_agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 14_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/14.0 Mobile/15E148 Safari/604.1',
         'http_headers': {'Referer': 'https://www.tiktok.com/'},
     }
@@ -91,43 +110,41 @@ def download_video(url):
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             ydl.download([url])
         files = glob.glob(os.path.join(temp_dir, 'video_*'))
+        gc.collect() # Limpiar RAM
         return files[0] if files else None
-    except Exception as e:
-        return None
+    except: return None
 
-# --- ANÁLISIS MULTI-LUGAR ---
+# --- 5. ANÁLISIS MULTI-LUGAR GEMINI ---
 def analyze_with_gemini(video_path):
     print(f"📤 Subiendo a Gemini...")
+    video_file = None
     try:
         video_file = genai.upload_file(path=video_path)
         while video_file.state.name == "PROCESSING":
             time.sleep(1)
             video_file = genai.get_file(video_file.name)
-    except Exception as e:
-        raise Exception(f"Error Gemini: {e}")
+    except Exception as e: raise Exception(f"Error Gemini Upload: {e}")
 
-    print("🤖 Analizando múltiples lugares...")
+    print("🤖 Analizando (Multi-Lugar)...")
     try: model = genai.GenerativeModel(model_name="gemini-2.5-flash")
     except: model = genai.GenerativeModel(model_name="gemini-pro")
     
-    # PROMPT ACTUALIZADO PARA LISTAS
     prompt = """
-    Analiza este video de viaje. Identifica TODOS los lugares turísticos o de interés mencionados.
-    
-    Responde ÚNICAMENTE con un JSON Array (una lista de objetos).
-    Ejemplo: [ {"placeName": "A", ...}, {"placeName": "B", ...} ]
+    Analiza este video de viaje. Identifica TODOS los lugares turísticos mencionados.
+    Responde ÚNICAMENTE con un JSON Array. Ejemplo: [ {"placeName": "A", ...}, {"placeName": "B", ...} ]
     
     INSTRUCCIONES:
-    1. Claves en INGLÉS. Valores en ESPAÑOL.
-    2. Si hay varios lugares, crea un objeto para cada uno.
+    1. Las Claves (Keys) en INGLÉS.
+    2. Los Valores (Values) en ESPAÑOL.
+    3. Si hay varios lugares, crea un objeto por cada uno.
     
-    Plantilla de Objeto:
+    Plantilla JSON:
     {
       "category": "Lugar/Comida/Otro",
-      "placeName": "Nombre específico",
+      "placeName": "Nombre del lugar",
       "estimatedLocation": "Ciudad, País",
       "priceRange": "Precio estimado",
-      "summary": "Resumen específico de ESTE lugar en español",
+      "summary": "Resumen específico de este lugar en español",
       "score": 5,
       "confidenceLevel": "Alto",
       "criticalVerdict": "Opinión crítica",
@@ -135,29 +152,29 @@ def analyze_with_gemini(video_path):
     }
     """
     
-    response = model.generate_content([video_file, prompt], generation_config={"response_mime_type": "application/json"})
-    
-    try: genai.delete_file(video_file.name)
-    except: pass
-
-    # Parseo Inteligente (Maneja Listas)
-    clean_text = response.text.replace("```json", "").replace("```", "").strip()
     try:
+        response = model.generate_content([video_file, prompt], generation_config={"response_mime_type": "application/json"})
+        clean_text = response.text.replace("```json", "").replace("```", "").strip()
         raw_data = json.loads(clean_text)
-    except:
-        raw_data = []
+    except: raw_data = []
+    
+    # Limpieza inmediata
+    try: 
+        if video_file: genai.delete_file(video_file.name)
+    except: pass
+    gc.collect() # Limpiar RAM agresivamente
 
-    # Si Gemini devuelve un solo objeto por error, lo convertimos en lista
+    # Asegurar que sea lista
     if isinstance(raw_data, dict): raw_data = [raw_data]
     
     final_results = []
     
-    # PROCESAMOS CADA LUGAR ENCONTRADO
+    # Procesar y verificar cada lugar encontrado
     for item in raw_data:
         guessed_name = str(item.get("placeName") or "Desconocido")
         guessed_loc = str(item.get("estimatedLocation") or "")
         
-        # Verificación individual en Maps
+        # Verificar en Maps
         maps_data = verify_location_with_maps(guessed_name, guessed_loc)
         
         final_name = maps_data["officialName"] if maps_data else guessed_name
@@ -179,11 +196,13 @@ def analyze_with_gemini(video_path):
         }
         final_results.append(safe_record)
 
-    return final_results # Devuelve una LISTA
+    return final_results
 
 # --- RUTAS ---
+
 @app.route('/analyze', methods=['POST'])
-def analyze_video():
+def analyze_video_route():
+    video_path = None
     try:
         data = request.json
         if isinstance(data, list): data = data[0]
@@ -193,71 +212,120 @@ def analyze_video():
         video_path = download_video(url)
         if not video_path: return jsonify({"error": "Error descarga"}), 500
 
-        # Obtenemos la LISTA de resultados
         results_list = analyze_with_gemini(video_path)
-        
-        # Devolvemos la lista completa al frontend
-        # NOTA: El frontend debe estar listo para recibir un Array
-        return jsonify(results_list)
-        
+        return jsonify(results_list) # Devuelve siempre una lista
     except Exception as e:
         return jsonify({"error": str(e)}), 500
     finally:
         try:
-            if 'video_path' in locals() and video_path and os.path.exists(video_path):
-                os.remove(video_path)
+            if video_path and os.path.exists(video_path): os.remove(video_path)
         except: pass
+        gc.collect()
 
 @app.route('/api/history', methods=['GET'])
 def get_history():
     sheet = get_db_connection()
     try: raw = sheet.get_all_records() if sheet else LOCAL_DB
     except: raw = LOCAL_DB
-    
-    # Limpieza básica
-    clean = []
-    for r in raw:
-        if isinstance(r, dict): clean.append(r)
+    clean = [r for r in raw if isinstance(r, dict)]
     return jsonify(clean)
 
+# --- GUARDADO INTELIGENTE (Fusión + Reintentos) ---
 @app.route('/api/history', methods=['POST'])
 def save_history():
-    # Esta ruta ahora debe ser inteligente.
-    # El frontend puede mandar UN objeto o UNA LISTA de objetos.
-    data = request.json
-    sheet = get_db_connection()
-    
-    items_to_save = []
-    if isinstance(data, list):
-        items_to_save = data
-    else:
-        items_to_save = [data] # Convertimos el solitario en lista
+    try:
+        new_items = request.json
+        if not isinstance(new_items, list): new_items = [new_items]
         
-    saved_count = 0
-    if sheet:
-        for item in items_to_save:
-            try:
+        sheet = get_db_connection()
+        if not sheet: return jsonify({"status": "local"})
+
+        # 1. Leer DB con reintentos
+        existing_records = []
+        def read_action():
+            nonlocal existing_records
+            existing_records = sheet.get_all_records()
+        
+        if not retry_operation(read_action):
+            return jsonify({"error": "Fallo al leer DB"}), 500
+
+        # Mapa para búsqueda rápida
+        name_map = {}
+        for i, record in enumerate(existing_records):
+            name = str(record.get('placeName', '')).strip().lower()
+            if name: name_map[name] = i + 2 # Fila real en Excel
+
+        failed_items = []
+
+        for item in new_items:
+            new_name = str(item.get('placeName', '')).strip()
+            key = new_name.lower()
+
+            if key in name_map:
+                # --- FUSIÓN (Lugar ya existe) ---
+                row_idx = name_map[key]
+                print(f"🔄 Fusionando: {new_name}...")
+                
+                try: old_record = existing_records[row_idx - 2]
+                except: old_record = {}
+                
+                # Promediar Score
+                try: old_score = float(old_record.get('score') or 0)
+                except: old_score = 0
+                try: new_score = float(item.get('score') or 0)
+                except: new_score = 0
+                
+                final_score = new_score if old_score == 0 else round((old_score + new_score) / 2, 1)
+
+                # Sumar Resumen
+                old_summary = str(old_record.get('summary') or "")
+                new_summary = str(item.get('summary') or "")
+                date_str = time.strftime("%d/%m")
+                
+                if new_summary not in old_summary:
+                    final_summary = f"{old_summary}\n\n[➕ {date_str}]: {new_summary}"[:4500]
+                else:
+                    final_summary = old_summary
+
+                # Acción de Actualización
+                def update_action():
+                    sheet.update_cell(row_idx, 5, final_score) # Score
+                    time.sleep(1)
+                    sheet.update_cell(row_idx, 7, final_summary) # Summary
+                
+                if not retry_operation(update_action):
+                    failed_items.append(new_name)
+
+            else:
+                # --- NUEVO (Lugar no existe) ---
+                print(f"🆕 Creando: {new_name}")
                 row = [
-                    item.get('id'),
-                    item.get('timestamp'),
-                    item.get('placeName'),
-                    item.get('category'),
-                    item.get('score'),
-                    item.get('estimatedLocation'),
-                    item.get('summary'),
-                    item.get('fileName')
+                    item.get('id'), item.get('timestamp'), item.get('placeName'),
+                    item.get('category'), item.get('score'), item.get('estimatedLocation'),
+                    item.get('summary'), item.get('fileName')
                 ]
-                sheet.append_row(row)
-                saved_count += 1
-            except: pass
-    else:
-        LOCAL_DB.extend(items_to_save)
+                
+                def append_action():
+                    sheet.append_row(row)
+                
+                if retry_operation(append_action):
+                    name_map[key] = len(existing_records) + 2 # Actualizar mapa local
+                else:
+                    failed_items.append(new_name)
+
+        if len(failed_items) > 0:
+            return jsonify({"status": "partial_error", "failed": failed_items}), 206
         
-    return jsonify({"status": "saved", "count": saved_count})
+        return jsonify({"status": "saved"})
+
+    except Exception as e:
+        print(f"❌ Error Crítico Save: {e}")
+        return jsonify({"error": str(e)}), 500
 
 @app.route('/health', methods=['GET'])
 def health_check(): return "OK", 200
 
+# Servir Frontend
 @app.route('/', defaults={'path': ''})
 @app.route('/<path:path>')
 def serve(path):
