@@ -91,38 +91,63 @@ def get_unsplash_photo(query):
     return ""
 
 # --- 3. MAPAS GRATIS (NOMINATIM / OSM) ---
+# --- 3. MAPAS GRATIS (NOMINATIM / OSM) - VERSIÓN "INSISTENTE" ---
 def verify_location_opensource(place_name, location_hint):
-    search_query = f"{place_name} {location_hint}"
-    url = "https://nominatim.openstreetmap.org/search"
     headers = { 'User-Agent': 'TravelHunterApp/2.0' }
-    params = { 'q': search_query, 'format': 'json', 'limit': 1 }
     
-    try:
-        print(f"🌍 Buscando en OSM: {search_query}...", flush=True)
-        response = requests.get(url, params=params, headers=headers, timeout=5)
-        data = response.json()
-        
-        if data and len(data) > 0:
-            best = data[0]
-            lat, lon = best.get('lat'), best.get('lon')
-            maps_link = f"https://www.google.com/maps/search/?api=1&query={lat},{lon}"
-            # Foto temática
-            photo_keyword = f"{place_name} travel"
-            photo_url = get_unsplash_photo(photo_keyword)
+    # Lista de intentos de búsqueda (de más específico a más general)
+    search_queries = [
+        f"{place_name} {location_hint}",  # Intento 1: Nombre + Ciudad (Ej: Huacachina Ica)
+        place_name,                       # Intento 2: Solo Nombre (Ej: Huacachina)
+        location_hint                     # Intento 3: Solo Ciudad (Para no dejar sin mapa, aunque sea general)
+    ]
 
-            return {
-                "officialName": place_name, 
-                "address": best.get('display_name', location_hint),
-                "placeId": str(best.get('place_id', 'osm')),
-                "lat": lat, "lng": lon,
-                "photoUrl": photo_url,
-                "rating": 0, "reviews": 0, "website": "", 
-                "mapsLink": maps_link, "openNow": "", "phone": ""
-            }
-    except Exception as e: print(f"⚠️ Error OSM: {e}", flush=True)
+    best_result = None
+
+    print(f"🌍 Buscando mapa para '{place_name}'...", flush=True)
+
+    for query in search_queries:
+        try:
+            # Si el query es muy corto o vacío, lo saltamos
+            if len(query) < 3: continue
+
+            url = "https://nominatim.openstreetmap.org/search"
+            params = { 'q': query, 'format': 'json', 'limit': 1 }
+            
+            response = requests.get(url, params=params, headers=headers, timeout=5)
+            data = response.json()
+            
+            if data and len(data) > 0:
+                best_result = data[0]
+                print(f"   ✅ Encontrado con: '{query}'", flush=True)
+                break # ¡Éxito! Dejamos de buscar
+            else:
+                print(f"   ⚠️ Falló con: '{query}'", flush=True)
+                time.sleep(1) # Pequeña pausa para no saturar a OSM
+        except: pass
+
+    # Procesamos el resultado (si encontramos algo en alguno de los intentos)
+    if best_result:
+        lat, lon = best_result.get('lat'), best_result.get('lon')
+        maps_link = f"https://www.google.com/maps/search/?api=1&query={lat},{lon}"
+        
+        # Foto temática (Siempre usamos el nombre original para la foto)
+        photo_keyword = f"{place_name} travel"
+        photo_url = get_unsplash_photo(photo_keyword)
+
+        return {
+            "officialName": place_name, 
+            "address": best_result.get('display_name', location_hint),
+            "placeId": str(best_result.get('place_id', 'osm')),
+            "lat": lat, "lng": lon,
+            "photoUrl": photo_url,
+            "rating": 0, "reviews": 0, "website": "", 
+            "mapsLink": maps_link, "openNow": "", "phone": ""
+        }
     
-    # Fallback solo foto
-    photo_url = get_unsplash_photo(f"{place_name} {location_hint}")
+    # Fallback FINAL: Si fallan los mapas, al menos buscamos la FOTO
+    print("   ❌ No se encontró mapa. Buscando solo foto...", flush=True)
+    photo_url = get_unsplash_photo(f"{place_name} travel")
     if photo_url:
          return {
             "officialName": place_name, "address": location_hint,
@@ -131,7 +156,7 @@ def verify_location_opensource(place_name, location_hint):
             "mapsLink": "", "openNow": "", "phone": ""
         }
     return None
-
+    
 # --- 4. VIDEO ---
 def download_video(url):
     print(f"⬇️ Descargando: {url}", flush=True)
