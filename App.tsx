@@ -1,7 +1,6 @@
 import React, { useState } from 'react';
-import { Upload, Search, MapPin, AlertTriangle, Loader2, ExternalLink, Star, Globe, Clock } from 'lucide-react';
+import { Upload, Search, MapPin, AlertTriangle, Loader2, Star, Globe, Clock, ChevronRight, Camera } from 'lucide-react';
 
-// 1. DEFINICIÓN DE TIPOS (Actualizada con los nuevos campos del servidor)
 interface TravelAnalysis {
   id: string;
   category: string;
@@ -13,7 +12,6 @@ interface TravelAnalysis {
   confidenceLevel: string;
   criticalVerdict: string;
   isTouristTrap: boolean;
-  // Nuevos campos visuales
   photoUrl?: string;
   realRating?: number;
   realReviews?: number;
@@ -28,7 +26,6 @@ function App() {
   const [results, setResults] = useState<TravelAnalysis[]>([]);
   const [error, setError] = useState('');
 
-  // Lógica para analizar
   const handleAnalyze = async () => {
     if (!url) return;
     setLoading(true);
@@ -36,76 +33,75 @@ function App() {
     setResults([]);
 
     try {
-      // Ajusta la URL si tu backend está en otro puerto/dominio
       const response = await fetch('/analyze', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ url }),
       });
 
-      if (!response.ok) throw new Error('Error al conectar con el servidor');
-      
+      if (!response.ok) throw new Error('Error de conexión');
       const data = await response.json();
-      // Si devuelve error el backend
       if (data.error) throw new Error(data.error);
 
-      // Si es un array lo guardamos, si es objeto lo metemos en array
       const dataArray = Array.isArray(data) ? data : [data];
       setResults(dataArray);
 
-      // Guardado automático en el historial (Batch)
-      try {
-        await fetch('/api/history', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(dataArray)
-        });
-      } catch (e) {
-        console.warn("No se pudo guardar en el historial", e);
-      }
+      // Guardar en background
+      fetch('/api/history', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(dataArray)
+      }).catch(() => {});
 
     } catch (err: any) {
-      setError(err.message || 'Ocurrió un error inesperado');
+      setError(err.message || 'Error inesperado');
     } finally {
       setLoading(false);
     }
   };
 
-  // Helper para colores del Score
-  const getScoreColor = (score: number) => {
-    if (score >= 4.5) return 'bg-emerald-100 text-emerald-700 border-emerald-200';
-    if (score >= 3.5) return 'bg-blue-100 text-blue-700 border-blue-200';
-    return 'bg-amber-100 text-amber-700 border-amber-200';
+  const getScoreBadge = (score: number) => {
+    if (score >= 4.5) return 'bg-emerald-400 text-white shadow-emerald-200';
+    if (score >= 3.5) return 'bg-blue-400 text-white shadow-blue-200';
+    return 'bg-amber-400 text-white shadow-amber-200';
   };
 
   return (
-    <div className="min-h-screen bg-slate-50 text-slate-900 font-sans p-6">
-      <div className="max-w-5xl mx-auto">
-        
-        {/* HEADER */}
-        <header className="mb-10 text-center">
-          <h1 className="text-4xl font-extrabold text-slate-800 tracking-tight mb-2">
-            ✈️ Travel Hunter AI
-          </h1>
-          <p className="text-slate-500">
-            Descubre la verdad de los videos de viaje. Sin filtros.
-          </p>
-        </header>
+    <div className="min-h-screen bg-[#F3F5F9] font-sans text-slate-800 selection:bg-purple-100">
+      
+      {/* BACKGROUND DECORATION */}
+      <div className="fixed top-0 left-0 w-full h-96 bg-gradient-to-b from-indigo-50 to-[#F3F5F9] -z-10" />
 
-        {/* INPUT SECTION */}
-        <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-200 mb-8 max-w-2xl mx-auto">
-          <label className="block text-sm font-medium text-slate-700 mb-2">
-            Pega el enlace de TikTok / Instagram / Shorts
-          </label>
-          <div className="flex gap-3">
-            <div className="relative flex-grow">
-              <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
-                <Search className="h-5 w-5 text-slate-400" />
+      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-12">
+        
+        {/* HEADER AMIGABLE */}
+        <div className="text-center max-w-2xl mx-auto mb-12">
+          <div className="inline-flex items-center justify-center p-3 bg-white rounded-2xl shadow-sm mb-4">
+            <span className="text-2xl mr-2">✈️</span>
+            <span className="font-bold text-slate-700 tracking-tight">Travel Hunter</span>
+          </div>
+          <h1 className="text-4xl md:text-5xl font-black text-slate-800 tracking-tight mb-4">
+            Descubre tu próxima <br/>
+            <span className="text-transparent bg-clip-text bg-gradient-to-r from-indigo-600 to-purple-600">
+              aventura real
+            </span>
+          </h1>
+          <p className="text-lg text-slate-500">
+            Analizamos videos de redes sociales para decirte qué vale la pena y qué es una trampa.
+          </p>
+        </div>
+
+        {/* INPUT DE BÚSQUEDA FLOTANTE */}
+        <div className="max-w-3xl mx-auto mb-16 relative z-10">
+          <div className="bg-white p-2 rounded-3xl shadow-xl shadow-indigo-100/50 flex flex-col sm:flex-row items-center border border-slate-100">
+            <div className="flex-grow w-full relative">
+              <div className="absolute inset-y-0 left-0 pl-4 flex items-center pointer-events-none">
+                <Search className="h-5 w-5 text-indigo-300" />
               </div>
               <input
                 type="text"
-                className="block w-full pl-10 pr-3 py-3 border border-slate-300 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-all"
-                placeholder="https://www.tiktok.com/@usuario/video..."
+                className="w-full pl-11 pr-4 py-4 rounded-2xl border-none focus:ring-0 text-slate-700 placeholder:text-slate-300 text-lg"
+                placeholder="Pega aquí el link de TikTok o Instagram..."
                 value={url}
                 onChange={(e) => setUrl(e.target.value)}
               />
@@ -113,165 +109,160 @@ function App() {
             <button
               onClick={handleAnalyze}
               disabled={loading || !url}
-              className="bg-blue-600 hover:bg-blue-700 text-white px-6 py-3 rounded-xl font-semibold transition-all disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2 shadow-lg shadow-blue-200"
+              className="w-full sm:w-auto mt-2 sm:mt-0 bg-indigo-600 hover:bg-indigo-700 text-white px-8 py-4 rounded-2xl font-bold transition-all transform hover:scale-105 active:scale-95 disabled:opacity-70 disabled:scale-100 flex items-center justify-center gap-2 shadow-lg shadow-indigo-200"
             >
-              {loading ? <Loader2 className="animate-spin h-5 w-5" /> : <Upload className="h-5 w-5" />}
-              Analizar
+              {loading ? <Loader2 className="animate-spin h-5 w-5" /> : 'Analizar Magia ✨'}
             </button>
           </div>
           {error && (
-            <div className="mt-4 p-3 bg-red-50 text-red-700 rounded-lg text-sm flex items-center gap-2">
-              <AlertTriangle className="h-4 w-4" />
+            <div className="mt-4 text-center text-red-500 bg-red-50 py-2 px-4 rounded-xl inline-block mx-auto w-full">
               {error}
             </div>
           )}
         </div>
 
-        {/* RESULTS GRID (AQUÍ ESTÁ LA NUEVA MAGIA VISUAL) */}
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-          {results.map((item) => (
-            <div 
-              key={item.id} 
-              className="bg-white rounded-2xl shadow-lg border border-slate-100 overflow-hidden hover:shadow-xl transition-all duration-300 flex flex-col"
-            >
-              {/* 1. IMAGEN DEL LUGAR (Header) */}
-              <div className="relative h-56 bg-slate-200 group">
-                {item.photoUrl ? (
-                  <img 
-                    src={item.photoUrl} 
-                    alt={item.placeName} 
-                    className="w-full h-full object-cover transition-transform duration-700 group-hover:scale-105"
-                  />
-                ) : (
-                  <div className="flex items-center justify-center h-full text-slate-400 bg-slate-100">
-                    <span className="text-sm font-medium">Sin foto disponible</span>
-                  </div>
-                )}
+        {/* GRID DE RESULTADOS (MASONRY STYLE) */}
+        {results.length > 0 && (
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8">
+            {results.map((item) => (
+              <div 
+                key={item.id} 
+                className="group bg-white rounded-[2rem] overflow-hidden shadow-lg shadow-slate-200/50 hover:shadow-2xl hover:shadow-indigo-200/50 transition-all duration-300 hover:-translate-y-2 border border-slate-100"
+              >
                 
-                {/* Badge Trampa */}
-                {item.isTouristTrap && (
-                  <div className="absolute top-3 right-3 bg-red-600 text-white text-xs font-bold px-3 py-1.5 rounded-full shadow-md flex items-center gap-1 animate-pulse">
-                    <AlertTriangle className="h-3 w-3" /> TRAMPA
-                  </div>
-                )}
+                {/* 1. IMAGEN HERO (ALTO IMPACTO) */}
+                <div className="relative h-72 overflow-hidden">
+                  {item.photoUrl ? (
+                    <img 
+                      src={item.photoUrl} 
+                      alt={item.placeName} 
+                      className="w-full h-full object-cover transition-transform duration-700 group-hover:scale-110"
+                    />
+                  ) : (
+                    <div className="w-full h-full bg-slate-100 flex flex-col items-center justify-center text-slate-300">
+                      <Camera className="h-12 w-12 mb-2 opacity-50" />
+                      <span className="font-medium">Sin foto disponible</span>
+                    </div>
+                  )}
 
-                {/* Badge Precio */}
-                <div className="absolute bottom-3 left-3 bg-black/60 backdrop-blur-md text-white text-xs font-medium px-3 py-1 rounded-lg border border-white/20">
-                  💰 {item.priceRange}
-                </div>
-              </div>
+                  {/* GRADIENTE SUPERIOR PARA LEER TEXTO */}
+                  <div className="absolute top-0 left-0 w-full h-24 bg-gradient-to-b from-black/50 to-transparent pointer-events-none" />
 
-              {/* 2. CONTENIDO */}
-              <div className="p-6 flex flex-col flex-grow">
-                
-                {/* Título y Score */}
-                <div className="flex justify-between items-start mb-3">
-                  <div>
-                    <span className="text-xs font-bold text-blue-600 uppercase tracking-wider mb-1 block">
+                  {/* BADGES FLOTANTES */}
+                  <div className="absolute top-4 left-4 right-4 flex justify-between items-start">
+                    <span className="bg-white/90 backdrop-blur-md text-slate-800 text-xs font-bold px-3 py-1.5 rounded-full uppercase tracking-wider shadow-sm">
                       {item.category}
                     </span>
-                    <h3 className="text-xl font-bold text-slate-800 leading-snug">
-                      {item.placeName}
-                    </h3>
-                    <div className="flex items-center text-slate-500 text-sm mt-1 gap-1">
-                      <MapPin className="h-3 w-3" />
-                      {item.estimatedLocation}
-                    </div>
+                    {item.isTouristTrap && (
+                      <span className="bg-red-500 text-white text-xs font-bold px-3 py-1.5 rounded-full shadow-lg animate-pulse flex items-center gap-1">
+                        <AlertTriangle className="h-3 w-3" /> TRAMPA
+                      </span>
+                    )}
                   </div>
+
+                  {/* SCORE STICKER */}
+                  <div className={`absolute bottom-4 right-4 h-14 w-14 rounded-full flex flex-col items-center justify-center shadow-lg border-2 border-white ${getScoreBadge(item.score)}`}>
+                    <span className="text-lg font-black leading-none">{item.score}</span>
+                    <span className="text-[9px] font-bold opacity-90">PTS</span>
+                  </div>
+                </div>
+
+                {/* 2. CONTENIDO CARD */}
+                <div className="p-6 relative">
                   
-                  <div className={`flex flex-col items-center justify-center px-3 py-1.5 rounded-xl border ${getScoreColor(item.score)}`}>
-                    <span className="text-lg font-bold leading-none">{item.score}</span>
-                    <span className="text-[10px] opacity-80 font-medium">PUNTOS</span>
+                  {/* Info Rápida (Maps) */}
+                  {(item.realRating || item.openNow) && (
+                    <div className="flex gap-3 mb-3 text-xs font-medium text-slate-400">
+                      {item.realRating && (
+                        <span className="flex items-center gap-1 bg-amber-50 text-amber-700 px-2 py-1 rounded-lg">
+                          <Star className="h-3 w-3 fill-amber-500 text-amber-500" />
+                          {item.realRating} ({item.realReviews})
+                        </span>
+                      )}
+                      {item.openNow && (
+                        <span className={`flex items-center gap-1 px-2 py-1 rounded-lg ${item.openNow.includes('Abierto') ? 'bg-green-50 text-green-700' : 'bg-red-50 text-red-700'}`}>
+                          <Clock className="h-3 w-3" />
+                          {item.openNow.split(' ')[0]}
+                        </span>
+                      )}
+                    </div>
+                  )}
+
+                  <h3 className="text-2xl font-black text-slate-800 mb-1 leading-tight group-hover:text-indigo-600 transition-colors">
+                    {item.placeName}
+                  </h3>
+                  
+                  <div className="flex items-center text-slate-400 text-sm mb-4">
+                    <MapPin className="h-4 w-4 mr-1" />
+                    <span className="truncate">{item.estimatedLocation}</span>
                   </div>
-                </div>
 
-                {/* Datos Reales de Google (Si existen) */}
-                {(item.realRating || item.openNow) && (
-                  <div className="flex flex-wrap gap-3 mb-4 text-xs text-slate-600 bg-slate-50 p-2.5 rounded-lg border border-slate-100">
-                    {item.realRating && (
-                      <span className="flex items-center gap-1">
-                        <Star className="h-3 w-3 text-amber-400 fill-amber-400" />
-                        <span className="font-semibold">{item.realRating}</span>
-                        <span className="text-slate-400">({item.realReviews})</span>
-                      </span>
-                    )}
-                    {item.openNow && (
-                      <span className="flex items-center gap-1 border-l border-slate-200 pl-3">
-                        <Clock className="h-3 w-3 text-slate-400" />
-                        <span>{item.openNow}</span>
-                      </span>
-                    )}
-                  </div>
-                )}
-
-                {/* Resumen */}
-                <div className="prose prose-sm text-slate-600 mb-5 flex-grow">
-                  <p className="line-clamp-4 whitespace-pre-line text-sm leading-relaxed">
-                    {item.summary.replace(/\[.*?\]:/g, '') /* Limpiamos etiquetas técnicas visualmente */}
-                  </p>
-                </div>
-
-                {/* Veredicto Crítico */}
-                {item.criticalVerdict && (
-                  <div className="bg-amber-50 border-l-4 border-amber-300 p-3 mb-5 rounded-r-lg">
-                    <p className="text-xs text-amber-800 italic">
-                      "{item.criticalVerdict}"
+                  {/* Resumen con estilo */}
+                  <div className="bg-slate-50 p-4 rounded-2xl mb-5">
+                    <p className="text-slate-600 text-sm leading-relaxed line-clamp-4">
+                      {item.summary.split('[🕵️‍♂️ Web]:')[0]}
                     </p>
                   </div>
-                )}
 
-                {/* 3. BOTONES DE ACCIÓN (Footer) */}
-                <div className="grid grid-cols-2 gap-3 mt-auto pt-4 border-t border-slate-100">
-                  {item.mapsLink ? (
-                    <a 
-                      href={item.mapsLink} 
-                      target="_blank" 
-                      rel="noopener noreferrer"
-                      className="flex items-center justify-center gap-2 px-4 py-2.5 bg-blue-50 text-blue-700 rounded-xl text-sm font-semibold hover:bg-blue-100 transition-colors"
-                    >
-                      <MapPin className="h-4 w-4" />
-                      Ver Mapa
-                    </a>
-                  ) : (
-                     <button disabled className="flex items-center justify-center gap-2 px-4 py-2.5 bg-slate-50 text-slate-400 rounded-xl text-sm font-semibold cursor-not-allowed">
-                       <MapPin className="h-4 w-4" /> Sin Mapa
-                     </button>
+                  {/* Veredicto Web (Si existe) */}
+                  {item.summary.includes('[🕵️‍♂️ Web]:') && (
+                    <div className="mb-5 flex items-start gap-3 p-3 bg-indigo-50 rounded-xl border border-indigo-100">
+                      <div className="bg-indigo-100 p-1.5 rounded-full shrink-0">
+                        <Search className="h-4 w-4 text-indigo-600" />
+                      </div>
+                      <p className="text-xs text-indigo-800 italic leading-relaxed">
+                        {item.summary.split('[🕵️‍♂️ Web]:')[1]}
+                      </p>
+                    </div>
                   )}
 
-                  {item.website ? (
-                    <a 
-                      href={item.website} 
-                      target="_blank" 
-                      rel="noopener noreferrer"
-                      className="flex items-center justify-center gap-2 px-4 py-2.5 bg-slate-50 text-slate-700 rounded-xl text-sm font-semibold hover:bg-slate-100 transition-colors border border-slate-200"
-                    >
-                      <Globe className="h-4 w-4" />
-                      Web
-                    </a>
-                  ) : (
-                    <button disabled className="flex items-center justify-center gap-2 px-4 py-2.5 bg-slate-50 text-slate-300 rounded-xl text-sm font-semibold cursor-not-allowed border border-slate-100">
-                      <Globe className="h-4 w-4" /> No Web
-                    </button>
-                  )}
+                  {/* FOOTER DE ACCIONES */}
+                  <div className="flex items-center justify-between pt-4 border-t border-slate-100">
+                    <div className="text-xs font-bold text-slate-300 uppercase tracking-widest">
+                      {item.priceRange === '??' ? 'Precio N/A' : item.priceRange}
+                    </div>
+                    
+                    <div className="flex gap-2">
+                      {item.website && (
+                        <a href={item.website} target="_blank" rel="noreferrer" className="p-2.5 bg-slate-100 text-slate-500 rounded-xl hover:bg-slate-200 transition-colors">
+                          <Globe className="h-5 w-5" />
+                        </a>
+                      )}
+                      {item.mapsLink ? (
+                        <a 
+                          href={item.mapsLink} 
+                          target="_blank" 
+                          rel="noreferrer" 
+                          className="flex items-center gap-2 px-5 py-2.5 bg-slate-900 text-white rounded-xl text-sm font-bold hover:bg-black transition-all shadow-md hover:shadow-lg"
+                        >
+                          Ir al Mapa <ChevronRight className="h-4 w-4" />
+                        </a>
+                      ) : (
+                        <button disabled className="px-5 py-2.5 bg-slate-100 text-slate-300 rounded-xl text-sm font-bold cursor-not-allowed">
+                          Sin Mapa
+                        </button>
+                      )}
+                    </div>
+                  </div>
+
                 </div>
-
               </div>
-            </div>
-          ))}
-        </div>
-
-        {/* EMPTY STATE */}
-        {!loading && results.length === 0 && !error && (
-          <div className="text-center py-20 text-slate-400">
-            <div className="bg-slate-100 h-20 w-20 rounded-full flex items-center justify-center mx-auto mb-4">
-              <Search className="h-8 w-8 text-slate-300" />
-            </div>
-            <p className="text-lg">Pega un link arriba para comenzar a descubrir.</p>
+            ))}
           </div>
         )}
+
+        {/* EMPTY STATE AMIGABLE */}
+        {!loading && results.length === 0 && (
+          <div className="text-center py-24 opacity-60">
+            <div className="inline-block p-6 bg-white rounded-full shadow-lg mb-4 rotate-12">
+              <span className="text-4xl">🌍</span>
+            </div>
+            <p className="text-slate-400 font-medium">Esperando tu próximo destino...</p>
+          </div>
+        )}
+
       </div>
     </div>
   );
 }
-
 export default App;
