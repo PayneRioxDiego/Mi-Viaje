@@ -21,14 +21,56 @@ MAPS_API_KEY = os.getenv("GOOGLE_MAPS_API_KEY")
 
 # Configuración Gemini
 if not API_KEY: print("❌ ERROR: API_KEY not found.")
-try: genai.configure(api_key=API_KEY)
-except Exception as e: print(f"❌ Error Gemini Config: {e}")
+try: 
+    genai.configure(api_key=API_KEY)
+    print("✅ Gemini Configurado.")
+except Exception as e: 
+    print(f"❌ Error Gemini Config: {e}")
 
 app = Flask(__name__, static_folder='dist', static_url_path='')
 CORS(app)
-LOCAL_DB = []
 
-# --- 1. CONEXIÓN A GOOGLE SHEETS ---
+# --- 0. DIAGNÓSTICO AL ARRANQUE (AUTO-DETECCIÓN) ---
+# Esto imprimirá en tus logs qué modelos REALMENTE tienes
+ACTIVE_MODEL_NAME = "gemini-pro" # Fallback por defecto
+
+def find_best_model():
+    global ACTIVE_MODEL_NAME
+    print("🔍 Buscando modelos disponibles en tu cuenta...")
+    available_models = []
+    try:
+        for m in genai.list_models():
+            if 'generateContent' in m.supported_generation_methods:
+                print(f"   - Encontrado: {m.name}")
+                available_models.append(m.name)
+        
+        # Lógica de preferencia (Busca el más nuevo disponible)
+        preferred_order = [
+            'models/gemini-2.5-flash', 
+            'models/gemini-2.0-flash-exp', 
+            'models/gemini-1.5-pro-latest', 
+            'models/gemini-1.5-flash-latest',
+            'models/gemini-pro'
+        ]
+        
+        for pref in preferred_order:
+            if pref in available_models:
+                ACTIVE_MODEL_NAME = pref
+                print(f"🎯 MODELO SELECCIONADO: {ACTIVE_MODEL_NAME}")
+                return
+        
+        # Si no encuentra los preferidos, usa el primero que sirva
+        if available_models:
+            ACTIVE_MODEL_NAME = available_models[0]
+            print(f"⚠️ Usando modelo genérico disponible: {ACTIVE_MODEL_NAME}")
+            
+    except Exception as e:
+        print(f"⚠️ Error listando modelos (posible error de API Key o Región): {e}")
+
+# Ejecutamos la búsqueda al iniciar el servidor
+find_best_model()
+
+# --- 1. GOOGLE SHEETS ---
 def get_db_connection():
     creds_json = os.getenv("GOOGLE_CREDENTIALS_JSON")
     sheet_id = os.getenv("GOOGLE_SHEET_ID")
@@ -43,7 +85,7 @@ def get_db_connection():
         print(f"❌ Error Sheets: {e}")
         return None
 
-# --- 2. VERIFICACIÓN CON GOOGLE MAPS ---
+# --- 2. MAPS ---
 def verify_location_with_maps(place_name, location_hint):
     if not MAPS_API_KEY: return None
     url = "https://places.googleapis.com/v1/places:searchText"
@@ -59,7 +101,6 @@ def verify_location_with_maps(place_name, location_hint):
         data = response.json()
         if "places" in data and len(data["places"]) > 0:
             best = data["places"][0]
-            print(f"✅ Maps encontró: {best.get('displayName', {}).get('text')}")
             return {
                 "officialName": best.get("displayName", {}).get("text"),
                 "address": best.get("formattedAddress"),
@@ -70,41 +111,33 @@ def verify_location_with_maps(place_name, location_hint):
     except: pass
     return None
 
-# --- 3. INVESTIGADOR DE REPUTACIÓN (Solo Modelos Nuevos) ---
+# --- 3. DETECTIVE (A PRUEBA DE FALLOS) ---
 def check_reputation_with_google(place_name, location):
-    print(f"🕵️‍♂️ Investigando reputación de: {place_name}...")
-    
-    # Solo intentamos con la nueva generación. Si falla, no hay backup.
-    # Probamos el nombre comercial y el técnico por si acaso.
-    candidate_models = ['gemini-2.5-flash', 'gemini-2.0-flash-exp']
-
-    for model_name in candidate_models:
+    print(f"🕵️‍♂️ Investigando: {place_name}...")
+    try:
+        # Intentamos usar el mismo modelo activo, o uno capaz de usar tools
+        model = genai.GenerativeModel(ACTIVE_MODEL_NAME)
+        
+        prompt = f"""
+        Busca en Google: "{place_name}" "{location}" reviews tourist trap scam.
+        Responde SÓLO si encuentras advertencias graves de estafa. Si es seguro, responde "OK".
+        """
+        
+        # Bloque try/except ESPECÍFICO para la herramienta de búsqueda
         try:
-            model = genai.GenerativeModel(model_name)
-            
-            prompt = f"""
-            Investiga en Google sobre "{place_name}" en "{location}".
-            Busca: "Tourist trap", "Scam", "Estafa", "Reviews".
-            Responde en 1 frase corta en ESPAÑOL: ¿Es legítimo o hay advertencias de estafa?
-            """
-            
-            response = model.generate_content(
-                prompt,
-                tools='google_search_retrieval'
-            )
-            
+            response = model.generate_content(prompt, tools='google_search_retrieval')
             verdict = response.text.strip()
-            print(f"🕵️‍♂️ Veredicto ({model_name}): {verdict}")
+            if "OK" in verdict or not verdict: return ""
             return verdict
-            
         except Exception as e:
-            # Si es un error de modelo no encontrado, probamos el siguiente de la lista 2.X
-            continue
+            print(f"⚠️ El modelo {ACTIVE_MODEL_NAME} no soporta búsqueda o falló: {e}")
+            return "" # Fallamos silenciosamente para no romper el análisis
 
-    print("⚠️ No se pudo conectar con Google Search (Modelos 2.X no respondieron).")
-    return ""
+    except Exception as e:
+        print(f"⚠️ Error general detective: {e}")
+        return ""
 
-# --- 4. DESCARGA DE VIDEO ---
+# --- 4. VIDEO ---
 def download_video(url):
     print(f"⬇️ Descargando: {url}")
     temp_dir = tempfile.mkdtemp()
@@ -124,45 +157,40 @@ def download_video(url):
         return files[0] if files else None
     except: return None
 
-# --- 5. ANÁLISIS PRINCIPAL (PURO 2.5) ---
+# --- 5. ANÁLISIS (USANDO MODELO AUTO-DETECTADO) ---
 def analyze_with_gemini(video_path):
-    print(f"📤 Subiendo a Gemini...")
+    print(f"📤 Subiendo video a Gemini...")
     video_file = None
     try:
         video_file = genai.upload_file(path=video_path)
         while video_file.state.name == "PROCESSING":
             time.sleep(1)
             video_file = genai.get_file(video_file.name)
-    except Exception as e: raise Exception(f"Error Gemini Upload: {e}")
+    except Exception as e: raise Exception(f"Error Upload: {e}")
 
-    print("🤖 Analizando Video (Motor Next-Gen)...")
+    print(f"🤖 Analizando con modelo: {ACTIVE_MODEL_NAME} ...")
     
-    # Lógica estricta: Solo intentamos cargar el modelo 2.5 Flash
-    # Si falla, lanzará error y lo veremos en el log (mejor que usar un modelo viejo)
     try: 
-        model = genai.GenerativeModel(model_name="gemini-2.5-flash")
-        print("⚡ Usando Gemini 2.5 Flash")
-    except: 
-        # Fallback SOLO al nombre técnico de la misma versión (no versiones viejas)
-        print("⚠️ '2.5-flash' no respondió, intentando '2.0-flash-exp'...")
-        model = genai.GenerativeModel(model_name="gemini-2.0-flash-exp")
-    
+        model = genai.GenerativeModel(model_name=ACTIVE_MODEL_NAME)
+    except:
+        # Último recurso
+        model = genai.GenerativeModel(model_name="gemini-pro")
+
     prompt = """
     Analiza este video. Identifica TODOS los lugares turísticos.
-    Responde ÚNICAMENTE con JSON Array. Ejemplo: [ {"placeName": "A", ...} ]
-    INSTRUCCIONES: Claves en INGLÉS, Valores en ESPAÑOL.
+    Responde ÚNICAMENTE con JSON Array.
     Plantilla:
-    {
-      "category": "Lugar/Comida/Otro",
+    [{
+      "category": "Lugar",
       "placeName": "Nombre",
       "estimatedLocation": "Ciudad, País",
       "priceRange": "Precio",
-      "summary": "Qué dice el video sobre esto",
+      "summary": "Resumen",
       "score": 5,
       "confidenceLevel": "Alto",
-      "criticalVerdict": "Opinión del video",
+      "criticalVerdict": "Opinión",
       "isTouristTrap": false
-    }
+    }]
     """
     
     try:
@@ -170,7 +198,7 @@ def analyze_with_gemini(video_path):
         clean_text = response.text.replace("```json", "").replace("```", "").strip()
         raw_data = json.loads(clean_text)
     except Exception as e:
-        print(f"❌ Error Generación: {e}")
+        print(f"❌ Error Generación AI: {e}")
         raw_data = []
     
     try: 
@@ -185,39 +213,35 @@ def analyze_with_gemini(video_path):
         guessed_name = str(item.get("placeName") or "Desconocido")
         guessed_loc = str(item.get("estimatedLocation") or "")
         
-        # 1. MAPS
         maps_data = verify_location_with_maps(guessed_name, guessed_loc)
         final_name = maps_data["officialName"] if maps_data else guessed_name
         final_loc = maps_data["address"] if maps_data else guessed_loc
 
-        # 2. WEB SEARCH (Detective)
+        # Detective Seguro (No rompe si falla)
         web_verdict = ""
         is_trap_confirmed = False
         if final_name != "Desconocido":
             web_verdict = check_reputation_with_google(final_name, final_loc)
-            if any(x in web_verdict.lower() for x in ["trampa", "estafa", "cuidado", "scam"]):
+            if any(x in web_verdict.lower() for x in ["trampa", "estafa", "scam"]):
                 is_trap_confirmed = True
 
-        video_summary = str(item.get("summary") or "")
-        combined_summary = video_summary
-        if web_verdict:
-            combined_summary = f"{video_summary}\n\n[🕵️‍♂️ Web Check]: {web_verdict}"
+        combined = str(item.get("summary") or "")
+        if web_verdict: combined += f"\n\n[🕵️‍♂️ Web]: {web_verdict}"
 
-        safe_record = {
+        final_results.append({
             "id": str(uuid.uuid4()),
             "timestamp": int(time.time() * 1000),
             "category": str(item.get("category") or "Otro"),
             "placeName": final_name,
             "estimatedLocation": final_loc,
             "priceRange": str(item.get("priceRange") or "??"),
-            "summary": combined_summary,
+            "summary": combined,
             "score": item.get("score") or 0,
             "confidenceLevel": str(item.get("confidenceLevel") or "Bajo"),
             "criticalVerdict": str(item.get("criticalVerdict") or ""),
             "isTouristTrap": is_trap_confirmed or bool(item.get("isTouristTrap")),
             "fileName": "Video TikTok"
-        }
-        final_results.append(safe_record)
+        })
 
     return final_results
 
@@ -239,10 +263,9 @@ def analyze_video_route():
 @app.route('/api/history', methods=['GET'])
 def get_history():
     sheet = get_db_connection()
-    try: raw = sheet.get_all_records() if sheet else LOCAL_DB
-    except: raw = LOCAL_DB
-    clean = [r for r in raw if isinstance(r, dict)]
-    return jsonify(clean)
+    try: raw = sheet.get_all_records() if sheet else []
+    except: raw = []
+    return jsonify([r for r in raw if isinstance(r, dict)])
 
 @app.route('/api/history', methods=['POST'])
 def save_history():
@@ -252,57 +275,34 @@ def save_history():
         sheet = get_db_connection()
         if not sheet: return jsonify({"status": "local"})
 
-        try: existing_records = sheet.get_all_records()
-        except: existing_records = []
+        try: existing = sheet.get_all_records()
+        except: existing = []
 
-        name_map = {}
-        for i, record in enumerate(existing_records):
-            name = str(record.get('placeName', '')).strip().lower()
-            if name: name_map[name] = i + 2
-
-        rows_to_create = [] 
-        updates_log = []    
+        name_map = {str(r.get('placeName', '')).strip().lower(): i+2 for i, r in enumerate(existing)}
+        rows_to_create = []
 
         for item in new_items:
-            new_name = str(item.get('placeName', '')).strip()
-            key = new_name.lower()
-
+            name = str(item.get('placeName', '')).strip()
+            key = name.lower()
             if key in name_map:
-                row_idx = name_map[key]
-                try: old_record = existing_records[row_idx - 2]
-                except: old_record = {}
-                try: old_score = float(old_record.get('score') or 0)
-                except: old_score = 0
-                try: new_score = float(item.get('score') or 0)
-                except: new_score = 0
-                final_score = new_score if old_score == 0 else round((old_score + new_score) / 2, 1)
-
-                old_summary = str(old_record.get('summary') or "")
-                new_summary = str(item.get('summary') or "")
-                date_str = time.strftime("%d/%m")
-                
-                if new_summary not in old_summary:
-                    final_summary = f"{old_summary}\n\n[➕ {date_str}]: {new_summary}"[:4500]
-                else: final_summary = old_summary
-
+                # Update simple
                 try:
-                    sheet.update_cell(row_idx, 5, final_score)
-                    sheet.update_cell(row_idx, 7, final_summary)
-                    updates_log.append(new_name)
+                    row_idx = name_map[key]
+                    sheet.update_cell(row_idx, 5, item.get('score'))
+                    sheet.update_cell(row_idx, 7, str(item.get('summary'))[:4500])
                 except: pass
             else:
-                row = [
-                    item.get('id'), item.get('timestamp'), item.get('placeName'),
+                rows_to_create.append([
+                    item.get('id'), item.get('timestamp'), name,
                     item.get('category'), item.get('score'), item.get('estimatedLocation'),
                     item.get('summary'), item.get('fileName')
-                ]
-                rows_to_create.append(row)
+                ])
 
-        if len(rows_to_create) > 0:
+        if rows_to_create:
             try: sheet.append_rows(rows_to_create)
-            except: return jsonify({"error": "Fallo guardado batch"}), 500
+            except: pass
 
-        return jsonify({"status": "saved", "created": len(rows_to_create)})
+        return jsonify({"status": "saved"})
 
     except Exception as e: return jsonify({"error": str(e)}), 500
 
