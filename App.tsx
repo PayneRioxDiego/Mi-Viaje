@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
-import { Upload, Search, MapPin, AlertTriangle, Loader2, Globe, ChevronRight, Camera, History } from 'lucide-react';
+import { Search, MapPin, AlertTriangle, Loader2, ChevronRight, Camera, History } from 'lucide-react';
 
+// DEFINICIÓN DE TIPOS
 interface TravelAnalysis {
   id: string;
   category: string;
@@ -24,10 +25,10 @@ function App() {
   const [url, setUrl] = useState('');
   const [loading, setLoading] = useState(false);
   const [results, setResults] = useState<TravelAnalysis[]>([]);
-  const [history, setHistory] = useState<TravelAnalysis[]>([]); // Estado para el historial
+  const [history, setHistory] = useState<TravelAnalysis[]>([]);
   const [error, setError] = useState('');
 
-  // 1. CARGAR HISTORIAL AL INICIO
+  // CARGAR HISTORIAL AL INICIO
   useEffect(() => {
     fetchHistory();
   }, []);
@@ -37,8 +38,9 @@ function App() {
       const response = await fetch('/api/history');
       if (response.ok) {
         const data = await response.json();
-        // Invertimos para ver los más recientes primero
-        setHistory(data.reverse());
+        // Filtramos datos basura que no tengan ID
+        const cleanData = data.filter((item: any) => item && item.id);
+        setHistory(cleanData.reverse());
       }
     } catch (e) {
       console.error("Error cargando historial", e);
@@ -49,7 +51,6 @@ function App() {
     if (!url) return;
     setLoading(true);
     setError('');
-    // No borramos results anteriores inmediatamente para evitar "parpadeo" feo
     
     try {
       const response = await fetch('/analyze', {
@@ -58,24 +59,19 @@ function App() {
         body: JSON.stringify({ url }),
       });
 
-      if (!response.ok) throw new Error('Error de conexión con el servidor');
+      if (!response.ok) throw new Error('Error de conexión');
       const data = await response.json();
       if (data.error) throw new Error(data.error);
 
       const dataArray = Array.isArray(data) ? data : [data];
-      
-      // Actualizamos resultados actuales
       setResults(dataArray);
       
-      // Guardamos en historial (Backend)
-      await fetch('/api/history', {
+      // Guardar en segundo plano
+      fetch('/api/history', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(dataArray)
-      });
-      
-      // Recargamos historial para verlo abajo
-      fetchHistory();
+      }).then(() => fetchHistory()); // Recargar historial al terminar
 
     } catch (err: any) {
       setError(err.message || 'Error inesperado');
@@ -90,66 +86,74 @@ function App() {
     return 'bg-amber-400 text-white shadow-amber-200';
   };
 
-  // Componente de Tarjeta para reutilizar en Resultado e Historial
-  const TravelCard = ({ item }: { item: TravelAnalysis }) => (
-    <div className="group bg-white rounded-[2rem] overflow-hidden shadow-lg shadow-slate-200/50 hover:shadow-2xl hover:shadow-indigo-200/50 transition-all duration-300 border border-slate-100 flex flex-col h-full">
-      <div className="relative h-64 overflow-hidden shrink-0">
-        {item.photoUrl ? (
-          <img src={item.photoUrl} alt={item.placeName} className="w-full h-full object-cover transition-transform duration-700 group-hover:scale-110" />
-        ) : (
-          <div className="w-full h-full bg-slate-100 flex flex-col items-center justify-center text-slate-300">
-            <Camera className="h-12 w-12 mb-2 opacity-50" />
-            <span className="font-medium text-xs">Sin foto</span>
-          </div>
-        )}
-        <div className="absolute top-0 left-0 w-full h-24 bg-gradient-to-b from-black/50 to-transparent pointer-events-none" />
-        <div className="absolute top-4 left-4 right-4 flex justify-between items-start">
-          <span className="bg-white/90 backdrop-blur-md text-slate-800 text-xs font-bold px-3 py-1.5 rounded-full uppercase tracking-wider shadow-sm">
-            {item.category}
-          </span>
-          {item.isTouristTrap && (
-            <span className="bg-red-500 text-white text-xs font-bold px-3 py-1.5 rounded-full shadow-lg animate-pulse flex items-center gap-1">
-              <AlertTriangle className="h-3 w-3" /> TRAMPA
-            </span>
+  // COMPONENTE TARJETA (Ahora blindado contra datos vacíos)
+  const TravelCard = ({ item }: { item: TravelAnalysis }) => {
+    // Protección: Si summary es undefined, usamos string vacío
+    const safeSummary = item.summary || "";
+    const summaryParts = safeSummary.split('[🕵️‍♂️ Web]:');
+    const mainSummary = summaryParts[0] || "Sin resumen disponible.";
+    const webVerdict = summaryParts[1] || "";
+
+    return (
+      <div className="group bg-white rounded-[2rem] overflow-hidden shadow-lg shadow-slate-200/50 hover:shadow-2xl hover:shadow-indigo-200/50 transition-all duration-300 border border-slate-100 flex flex-col h-full">
+        <div className="relative h-64 overflow-hidden shrink-0">
+          {item.photoUrl ? (
+            <img src={item.photoUrl} alt={item.placeName || "Lugar"} className="w-full h-full object-cover transition-transform duration-700 group-hover:scale-110" />
+          ) : (
+            <div className="w-full h-full bg-slate-100 flex flex-col items-center justify-center text-slate-300">
+              <Camera className="h-12 w-12 mb-2 opacity-50" />
+              <span className="font-medium text-xs">Sin foto</span>
+            </div>
           )}
-        </div>
-        <div className={`absolute bottom-4 right-4 h-12 w-12 rounded-full flex flex-col items-center justify-center shadow-lg border-2 border-white ${getScoreBadge(item.score)}`}>
-          <span className="text-base font-black leading-none">{item.score}</span>
-        </div>
-      </div>
-
-      <div className="p-6 flex flex-col flex-grow">
-        <h3 className="text-xl font-black text-slate-800 mb-1 leading-tight group-hover:text-indigo-600 transition-colors">
-          {item.placeName}
-        </h3>
-        <div className="flex items-center text-slate-400 text-xs mb-4">
-          <MapPin className="h-3 w-3 mr-1" />
-          <span className="truncate">{item.estimatedLocation}</span>
-        </div>
-
-        <div className="bg-slate-50 p-4 rounded-2xl mb-4 flex-grow">
-          <p className="text-slate-600 text-xs leading-relaxed line-clamp-4 hover:line-clamp-none transition-all cursor-pointer">
-            {item.summary.split('[🕵️‍♂️ Web]:')[0]}
-          </p>
-        </div>
-
-        <div className="flex items-center justify-between pt-4 border-t border-slate-100 mt-auto">
-          <div className="text-[10px] font-bold text-slate-300 uppercase tracking-widest">
-            {item.priceRange === '??' ? 'N/A' : item.priceRange}
-          </div>
-          <div className="flex gap-2">
-            {item.mapsLink ? (
-              <a href={item.mapsLink} target="_blank" rel="noreferrer" className="flex items-center gap-1 px-4 py-2 bg-slate-900 text-white rounded-xl text-xs font-bold hover:bg-black transition-all shadow-md">
-                Mapa <ChevronRight className="h-3 w-3" />
-              </a>
-            ) : (
-              <span className="px-4 py-2 bg-slate-100 text-slate-300 rounded-xl text-xs font-bold cursor-not-allowed">Sin Mapa</span>
+          <div className="absolute top-0 left-0 w-full h-24 bg-gradient-to-b from-black/50 to-transparent pointer-events-none" />
+          <div className="absolute top-4 left-4 right-4 flex justify-between items-start">
+            <span className="bg-white/90 backdrop-blur-md text-slate-800 text-xs font-bold px-3 py-1.5 rounded-full uppercase tracking-wider shadow-sm">
+              {item.category || "General"}
+            </span>
+            {item.isTouristTrap && (
+              <span className="bg-red-500 text-white text-xs font-bold px-3 py-1.5 rounded-full shadow-lg animate-pulse flex items-center gap-1">
+                <AlertTriangle className="h-3 w-3" /> TRAMPA
+              </span>
             )}
           </div>
+          <div className={`absolute bottom-4 right-4 h-12 w-12 rounded-full flex flex-col items-center justify-center shadow-lg border-2 border-white ${getScoreBadge(item.score || 0)}`}>
+            <span className="text-base font-black leading-none">{item.score || 0}</span>
+          </div>
+        </div>
+
+        <div className="p-6 flex flex-col flex-grow">
+          <h3 className="text-xl font-black text-slate-800 mb-1 leading-tight group-hover:text-indigo-600 transition-colors">
+            {item.placeName || "Nombre desconocido"}
+          </h3>
+          <div className="flex items-center text-slate-400 text-xs mb-4">
+            <MapPin className="h-3 w-3 mr-1" />
+            <span className="truncate">{item.estimatedLocation || "Ubicación desconocida"}</span>
+          </div>
+
+          <div className="bg-slate-50 p-4 rounded-2xl mb-4 flex-grow">
+            <p className="text-slate-600 text-xs leading-relaxed line-clamp-4 hover:line-clamp-none transition-all cursor-pointer">
+              {mainSummary}
+            </p>
+          </div>
+
+          <div className="flex items-center justify-between pt-4 border-t border-slate-100 mt-auto">
+            <div className="text-[10px] font-bold text-slate-300 uppercase tracking-widest">
+              {(!item.priceRange || item.priceRange === '??') ? 'N/A' : item.priceRange}
+            </div>
+            <div className="flex gap-2">
+              {item.mapsLink ? (
+                <a href={item.mapsLink} target="_blank" rel="noreferrer" className="flex items-center gap-1 px-4 py-2 bg-slate-900 text-white rounded-xl text-xs font-bold hover:bg-black transition-all shadow-md">
+                  Mapa <ChevronRight className="h-3 w-3" />
+                </a>
+              ) : (
+                <span className="px-4 py-2 bg-slate-100 text-slate-300 rounded-xl text-xs font-bold cursor-not-allowed">Sin Mapa</span>
+              )}
+            </div>
+          </div>
         </div>
       </div>
-    </div>
-  );
+    );
+  };
 
   return (
     <div className="min-h-screen bg-[#F3F5F9] font-sans text-slate-800 selection:bg-purple-100 pb-20">
@@ -215,7 +219,7 @@ function App() {
               <h2 className="text-2xl font-black text-slate-800">Tus Descubrimientos Anteriores</h2>
             </div>
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 opacity-90">
-              {history.map((item) => <TravelCard key={`hist-${item.id}`} item={item} />)}
+              {history.map((item) => <TravelCard key={`hist-${item.id || Math.random()}`} item={item} />)}
             </div>
           </div>
         )}
