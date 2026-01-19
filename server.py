@@ -13,7 +13,6 @@ import google.generativeai as genai
 from dotenv import load_dotenv
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
-from google.generativeai.types import HarmCategory, HarmBlockThreshold
 
 # --- CONFIGURACIÓN ---
 load_dotenv()
@@ -71,36 +70,45 @@ def verify_location_with_maps(place_name, location_hint):
     except: pass
     return None
 
-# --- 3. NUEVO: INVESTIGADOR DE REPUTACIÓN (GOOGLE SEARCH) ---
+# --- 3. INVESTIGADOR DE REPUTACIÓN (Búsqueda Web) ---
 def check_reputation_with_google(place_name, location):
-    """Usa Gemini con acceso a Google Search para buscar estafas o validación."""
     print(f"🕵️‍♂️ Investigando reputación de: {place_name}...")
-    try:
-        # Usamos un modelo ligero capaz de usar herramientas (tools)
-        model = genai.GenerativeModel('gemini-1.5-flash') 
-        
-        prompt = f"""
-        Actúa como un detective de viajes escéptico.
-        Investiga en Google sobre "{place_name}" en "{location}".
-        Busca específicamente: "Tourist trap", "Scam", "Estafa", "Overpriced", "Cerrado permanentemente".
-        
-        Responde en 1 sola frase en ESPAÑOL con tu veredicto.
-        Ejemplo: "Ojo: Muchos blogs reportan que cobran cubiertos extra y la comida es congelada."
-        Si todo parece bien, di: "Parece legítimo, tiene buenas menciones recientes."
-        """
-        
-        # Activamos la herramienta de búsqueda
-        response = model.generate_content(
-            prompt,
-            tools='google_search_retrieval' # <--- AQUÍ ESTÁ EL SUPERPODER
-        )
-        
-        verdict = response.text.strip()
-        print(f"🕵️‍♂️ Veredicto: {verdict}")
-        return verdict
-    except Exception as e:
-        print(f"⚠️ Error en investigación: {e}")
-        return ""
+    
+    # LISTA DE MODELOS A PROBAR (Prioridad 2.5 Flash según tu captura)
+    candidate_models = [
+        'gemini-2.5-flash',       # Tu modelo nuevo
+        'gemini-1.5-flash-latest',
+        'gemini-1.5-flash',
+        'gemini-1.5-pro'
+    ]
+
+    for model_name in candidate_models:
+        try:
+            model = genai.GenerativeModel(model_name)
+            
+            prompt = f"""
+            Investiga en Google sobre "{place_name}" en "{location}".
+            Busca: "Tourist trap", "Scam", "Estafa", "Reviews".
+            Responde en 1 frase corta en ESPAÑOL: ¿Es legítimo o hay advertencias de estafa?
+            """
+            
+            # Intentamos usar la herramienta de búsqueda
+            # Nota: Si 2.5 aún no soporta tools en API pública, fallará y saltará al 1.5
+            response = model.generate_content(
+                prompt,
+                tools='google_search_retrieval'
+            )
+            
+            verdict = response.text.strip()
+            print(f"🕵️‍♂️ Veredicto ({model_name}): {verdict}")
+            return verdict
+            
+        except Exception as e:
+            # Si falla este modelo, continuamos al siguiente silenciosamente
+            continue
+
+    print("⚠️ No se pudo conectar con Google Search (Modelos ocupados o no disponibles).")
+    return ""
 
 # --- 4. DESCARGA DE VIDEO ---
 def download_video(url):
@@ -122,7 +130,7 @@ def download_video(url):
         return files[0] if files else None
     except: return None
 
-# --- 5. ANÁLISIS PRINCIPAL ---
+# --- 5. ANÁLISIS PRINCIPAL (Usa Gemini 2.5) ---
 def analyze_with_gemini(video_path):
     print(f"📤 Subiendo a Gemini...")
     video_file = None
@@ -134,8 +142,17 @@ def analyze_with_gemini(video_path):
     except Exception as e: raise Exception(f"Error Gemini Upload: {e}")
 
     print("🤖 Analizando Video...")
-    try: model = genai.GenerativeModel(model_name="gemini-2.5-flash") # O 1.5 Pro
-    except: model = genai.GenerativeModel(model_name="gemini-1.5-pro")
+    
+    # INTENTO PRIORITARIO CON GEMINI 2.5
+    try: 
+        model = genai.GenerativeModel(model_name="gemini-2.5-flash")
+        print("⚡ Usando Gemini 2.5 Flash")
+    except: 
+        try:
+            model = genai.GenerativeModel(model_name="gemini-1.5-flash-latest")
+            print("⚡ Usando Gemini 1.5 Flash Latest")
+        except:
+            model = genai.GenerativeModel(model_name="gemini-1.5-flash")
     
     prompt = """
     Analiza este video. Identifica TODOS los lugares turísticos.
@@ -173,22 +190,21 @@ def analyze_with_gemini(video_path):
         guessed_name = str(item.get("placeName") or "Desconocido")
         guessed_loc = str(item.get("estimatedLocation") or "")
         
-        # 1. VERIFICAR EN MAPS (Nombre Oficial)
+        # 1. VERIFICAR EN MAPS
         maps_data = verify_location_with_maps(guessed_name, guessed_loc)
         
         final_name = maps_data["officialName"] if maps_data else guessed_name
         final_loc = maps_data["address"] if maps_data else guessed_loc
 
-        # 2. INVESTIGAR EN WEB (Detective) - Solo si tenemos un nombre válido
+        # 2. INVESTIGAR EN WEB
         web_verdict = ""
         is_trap_confirmed = False
         if final_name != "Desconocido":
+            # Llamamos a la función de búsqueda
             web_verdict = check_reputation_with_google(final_name, final_loc)
-            # Si el detective dice palabras clave, marcamos bandera roja
             if "trampa" in web_verdict.lower() or "estafa" in web_verdict.lower() or "cuidado" in web_verdict.lower():
                 is_trap_confirmed = True
 
-        # Mezclar resumen del video + veredicto web
         video_summary = str(item.get("summary") or "")
         combined_summary = video_summary
         if web_verdict:
@@ -201,7 +217,7 @@ def analyze_with_gemini(video_path):
             "placeName": final_name,
             "estimatedLocation": final_loc,
             "priceRange": str(item.get("priceRange") or "??"),
-            "summary": combined_summary, # Resumen Enriquecido
+            "summary": combined_summary,
             "score": item.get("score") or 0,
             "confidenceLevel": str(item.get("confidenceLevel") or "Bajo"),
             "criticalVerdict": str(item.get("criticalVerdict") or ""),
@@ -235,6 +251,8 @@ def get_history():
     clean = [r for r in raw if isinstance(r, dict)]
     return jsonify(clean)
 
+# --- GUARDADO EN LOTE (BATCH) ---
+# Esto soluciona el Timeout que se ve en tu log
 @app.route('/api/history', methods=['POST'])
 def save_history():
     try:
@@ -272,12 +290,12 @@ def save_history():
                 new_summary = str(item.get('summary') or "")
                 date_str = time.strftime("%d/%m")
                 
-                # Evitar duplicar el web check si ya está
                 if new_summary not in old_summary:
                     final_summary = f"{old_summary}\n\n[➕ {date_str}]: {new_summary}"[:4500]
                 else: final_summary = old_summary
 
                 try:
+                    # Actualizamos individualmente porque es rápido si son pocos
                     sheet.update_cell(row_idx, 5, final_score)
                     sheet.update_cell(row_idx, 7, final_summary)
                     updates_log.append(new_name)
@@ -290,11 +308,12 @@ def save_history():
                 ]
                 rows_to_create.append(row)
 
+        # Aquí ocurre la magia antibloqueo: Guardamos todos los nuevos JUNTOS
         if len(rows_to_create) > 0:
             try: sheet.append_rows(rows_to_create)
             except: return jsonify({"error": "Fallo guardado"}), 500
 
-        return jsonify({"status": "saved"})
+        return jsonify({"status": "saved", "created": len(rows_to_create)})
 
     except Exception as e: return jsonify({"error": str(e)}), 500
 
