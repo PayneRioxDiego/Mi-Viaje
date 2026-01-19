@@ -14,138 +14,121 @@ import google.generativeai as genai
 from dotenv import load_dotenv
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
+import urllib.parse
 
 # --- CONFIGURACIÓN ---
 load_dotenv()
 API_KEY = os.getenv("API_KEY")
-MAPS_API_KEY = os.getenv("GOOGLE_MAPS_API_KEY")
+UNSPLASH_KEY = os.getenv("UNSPLASH_ACCESS_KEY") # Nueva clave para fotos gratis
 
-print("🚀 INICIANDO SERVIDOR (MODO AUTO-DESCUBRIMIENTO)...", flush=True)
+print("🚀 INICIANDO MODO OPEN SOURCE (SIN TARJETA)...", flush=True)
 
 if not API_KEY: 
-    print("❌ FATAL: API_KEY no encontrada.", flush=True)
+    print("❌ FATAL: API_KEY (Gemini) no encontrada.", flush=True)
 else:
     try: 
         genai.configure(api_key=API_KEY)
-        print("✅ Cliente Gemini inicializado.", flush=True)
+        print("✅ Gemini Configurado.", flush=True)
     except Exception as e: 
         print(f"❌ Error Gemini Config: {e}", flush=True)
 
 app = Flask(__name__, static_folder='dist', static_url_path='')
 CORS(app)
 
-# --- MAGIA: BUSCADOR DE MODELOS REALES ---
-def find_working_model():
-    """Pregunta a la API qué modelos sirven con ESTA clave."""
-    print("🔍 Escaneando modelos compatibles con tu clave...", flush=True)
+# --- 1. SELECCIÓN DE MODELO GRATIS (AI STUDIO) ---
+def get_free_model():
+    candidates = ["gemini-1.5-flash", "gemini-1.5-flash-latest", "gemini-1.5-flash-001"]
+    for m in candidates:
+        try:
+            model = genai.GenerativeModel(model_name=m)
+            model.count_tokens("test")
+            return m
+        except: continue
+    return "gemini-pro"
+
+# --- 2. SISTEMA DE FOTOS GRATIS (UNSPLASH) ---
+def get_unsplash_photo(query):
+    if not UNSPLASH_KEY: return ""
     try:
-        # Obtenemos la lista real que Google nos permite usar
-        models = list(genai.list_models())
-        viable_models = []
-        
-        for m in models:
-            if 'generateContent' in m.supported_generation_methods:
-                viable_models.append(m.name)
-        
-        print(f"📋 Modelos encontrados: {viable_models}", flush=True)
-        
-        # Filtramos por preferencia (Gratis > Pro)
-        # Buscamos cualquiera que tenga 'flash' (suele ser el gratis/rápido)
-        for m in viable_models:
-            if 'flash' in m.lower() and '1.5' in m:
-                print(f"🎯 Seleccionado Preferido: {m}", flush=True)
-                return m
-                
-        # Si no hay flash 1.5, probamos el 2.0 (experimental)
-        for m in viable_models:
-            if 'flash' in m.lower() and '2.0' in m:
-                print(f"🎯 Seleccionado Experimental: {m}", flush=True)
-                return m
+        # Buscamos una foto vertical (portrait) o paisaje relacionada con el lugar
+        url = f"https://api.unsplash.com/search/photos?page=1&query={urllib.parse.quote(query)}&per_page=1&orientation=landscape&client_id={UNSPLASH_KEY}"
+        res = requests.get(url, timeout=3)
+        data = res.json()
+        if "results" in data and len(data["results"]) > 0:
+            return data["results"][0]["urls"]["regular"]
+    except: pass
+    return ""
 
-        # Si no, el primero que funcione
-        if viable_models:
-            print(f"⚠️ Usando fallback: {viable_models[0]}", flush=True)
-            return viable_models[0]
-            
-    except Exception as e:
-        print(f"❌ Error listando modelos: {e}", flush=True)
-        print("⚠️ Intentando forzar 'gemini-1.5-flash' a ciegas...", flush=True)
-        return "gemini-1.5-flash"
+# --- 3. SISTEMA DE MAPAS GRATIS (OPENSTREETMAP) ---
+def verify_location_opensource(place_name, location_hint):
+    # Nominatim es gratis y no requiere Key, pero pide un User-Agent
+    search_query = f"{place_name} {location_hint}"
+    url = "https://nominatim.openstreetmap.org/search"
     
-    return "gemini-pro" # Último recurso
-
-# Guardamos el modelo elegido en una variable global
-ACTIVE_MODEL_NAME = "gemini-1.5-flash" # Valor inicial por defecto
-
-# Ejecutamos la búsqueda AL ARRANCAR para ver el log inmediato
-try:
-    ACTIVE_MODEL_NAME = find_working_model()
-except: pass
-
-# --- 1. GOOGLE SHEETS ---
-def get_db_connection():
-    creds_json = os.getenv("GOOGLE_CREDENTIALS_JSON")
-    sheet_id = os.getenv("GOOGLE_SHEET_ID")
-    if not creds_json or not sheet_id: return None
-    try:
-        creds_dict = json.loads(creds_json)
-        SCOPES = ['https://www.googleapis.com/auth/spreadsheets', "https://www.googleapis.com/auth/drive"]
-        creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, SCOPES)
-        client = gspread.authorize(creds)
-        return client.open_by_key(sheet_id).sheet1
-    except: return None
-
-# --- 2. MAPS (MODO SEGURO - SIN COBRO) ---
-def verify_location_with_maps(place_name, location_hint):
-    if not MAPS_API_KEY: return None
-    
-    url = "https://places.googleapis.com/v1/places:searchText"
     headers = {
-        "Content-Type": "application/json",
-        "X-Goog-Api-Key": MAPS_API_KEY,
-        "X-Goog-FieldMask": "places.displayName,places.formattedAddress,places.id,places.location,places.photos,places.rating,places.userRatingCount,places.websiteUri,places.googleMapsUri,places.regularOpeningHours"
+        'User-Agent': 'TravelHunterApp/1.0' # Requisito de cortesía de OSM
     }
-    query = f"{place_name} {location_hint}"
-    payload = {"textQuery": query}
+    params = {
+        'q': search_query,
+        'format': 'json',
+        'limit': 1,
+        'addressdetails': 1
+    }
     
     try:
-        response = requests.post(url, headers=headers, json=payload, timeout=5)
-        # Si falla (403 Facturación), lo ignoramos silenciosamente
-        if response.status_code != 200: return None
-
+        print(f"🌍 Buscando en OpenStreetMap: {search_query}...", flush=True)
+        response = requests.get(url, params=params, headers=headers, timeout=5)
         data = response.json()
-        if "places" in data and len(data["places"]) > 0:
-            best = data["places"][0]
+        
+        if data and len(data) > 0:
+            best = data[0]
+            display_name = best.get('display_name', '')
+            lat = best.get('lat')
+            lon = best.get('lon')
             
-            photo_url = ""
-            if "photos" in best and len(best["photos"]) > 0:
-                photo_ref = best["photos"][0]["name"]
-                photo_url = f"https://places.googleapis.com/v1/{photo_ref}/media?maxHeightPx=600&maxWidthPx=600&key={MAPS_API_KEY}"
+            # Generamos link de mapa abierto
+            maps_link = f"https://www.openstreetmap.org/?mlat={lat}&mlon={lon}#map=16/{lat}/{lon}"
+            # O link de Google Maps (funciona sin API key, solo como link)
+            google_link = f"https://www.google.com/maps/search/?api=1&query={lat},{lon}"
 
-            open_now = ""
-            try:
-                is_open = best.get("regularOpeningHours", {}).get("openNow")
-                if is_open is True: open_now = "Abierto"
-                elif is_open is False: open_now = "Cerrado"
-            except: pass
+            # Conseguimos foto temática de Unsplash
+            # Usamos el tipo de lugar o la ciudad para la foto
+            photo_keyword = f"{place_name} travel"
+            photo_url = get_unsplash_photo(photo_keyword)
 
             return {
-                "officialName": best.get("displayName", {}).get("text"),
-                "address": best.get("formattedAddress"),
-                "placeId": best.get("id"),
-                "lat": best.get("location", {}).get("latitude"),
-                "lng": best.get("location", {}).get("longitude"),
+                "officialName": place_name, # OSM a veces da direcciones muy largas, mejor mantener el nombre original
+                "address": display_name,
+                "placeId": str(best.get('place_id', '')),
+                "lat": lat,
+                "lng": lon,
                 "photoUrl": photo_url,
-                "rating": best.get("rating", 0),
-                "reviews": best.get("userRatingCount", 0),
-                "website": best.get("websiteUri", ""),
-                "mapsLink": best.get("googleMapsUri", ""),
-                "openNow": open_now,
+                "rating": 0, # OSM no tiene ratings
+                "reviews": 0,
+                "website": "", # Difícil de sacar de OSM
+                "mapsLink": google_link, # Usamos link de Google para comodidad del usuario
+                "openNow": "",
                 "phone": ""
             }
-    except: return None
+    except Exception as e:
+        print(f"⚠️ Error OSM: {e}", flush=True)
+    
+    # Si OSM falla, intentamos al menos conseguir una foto con el nombre
+    photo_url = get_unsplash_photo(f"{place_name} {location_hint}")
+    if photo_url:
+         return {
+            "officialName": place_name,
+            "address": location_hint,
+            "placeId": "manual",
+            "lat": "", "lng": "",
+            "photoUrl": photo_url,
+            "rating": 0, "reviews": 0, "website": "", 
+            "mapsLink": "", "openNow": "", "phone": ""
+        }
+        
+    return None
 
-# --- 3. VIDEO ---
+# --- 4. VIDEO ---
 def download_video(url):
     print(f"⬇️ Descargando: {url}", flush=True)
     temp_dir = tempfile.mkdtemp()
@@ -161,7 +144,7 @@ def download_video(url):
         print(f"❌ Error descarga: {e}", flush=True)
         return None
 
-# --- 4. ANÁLISIS ---
+# --- 5. ANÁLISIS ---
 def analyze_with_gemini(video_path):
     print(f"📤 Subiendo video...", flush=True)
     video_file = None
@@ -173,15 +156,16 @@ def analyze_with_gemini(video_path):
         if video_file.state.name == "FAILED": raise Exception("Video rechazado")
     except: raise Exception("Error subiendo video")
 
-    print(f"🤖 Analizando con modelo activo: {ACTIVE_MODEL_NAME}...", flush=True)
+    active_model = get_free_model()
+    print(f"🤖 Analizando con {active_model}...", flush=True)
     
     try:
-        model = genai.GenerativeModel(model_name=ACTIVE_MODEL_NAME)
+        model = genai.GenerativeModel(model_name=active_model)
     except:
-        raise Exception(f"No se pudo cargar el modelo {ACTIVE_MODEL_NAME}")
+        raise Exception("Error modelo.")
 
     prompt = """
-    Analiza este video de viaje. Identifica TODOS los lugares turísticos.
+    Analiza este video de viaje. Identifica TODOS los lugares turísticos mencionados.
     OUTPUT: JSON Array ONLY. NO Markdown.
     LANGUAGE: SPANISH.
     
@@ -219,10 +203,20 @@ def analyze_with_gemini(video_path):
         guessed_name = str(item.get("placeName") or "Desconocido")
         guessed_loc = str(item.get("estimatedLocation") or "")
         
-        maps = verify_location_with_maps(guessed_name, guessed_loc)
+        # --- AQUÍ USAMOS EL SISTEMA GRATIS ---
+        opensource_data = verify_location_opensource(guessed_name, guessed_loc)
         
-        final_name = maps["officialName"] if maps else guessed_name
-        final_loc = maps["address"] if maps else guessed_loc
+        if opensource_data:
+            final_name = opensource_data["officialName"]
+            final_loc = opensource_data["address"]
+            photo_url = opensource_data["photoUrl"]
+            maps_link = opensource_data["mapsLink"]
+        else:
+            final_name = guessed_name
+            final_loc = guessed_loc
+            photo_url = ""
+            maps_link = ""
+
         combined_summary = str(item.get("summary") or "")
 
         final_results.append({
@@ -238,12 +232,13 @@ def analyze_with_gemini(video_path):
             "criticalVerdict": str(item.get("criticalVerdict") or ""),
             "isTouristTrap": bool(item.get("isTouristTrap")),
             "fileName": "Video TikTok",
-            "photoUrl": maps["photoUrl"] if maps else "",
-            "realRating": maps["rating"] if maps else 0,
-            "realReviews": maps["reviews"] if maps else 0,
-            "website": maps["website"] if maps else "",
-            "mapsLink": maps["mapsLink"] if maps else "",
-            "openNow": maps["openNow"] if maps else "",
+            # Datos Open Source
+            "photoUrl": photo_url,
+            "realRating": 0, # No hay rating en OSM
+            "realReviews": 0,
+            "website": "",
+            "mapsLink": maps_link,
+            "openNow": "",
             "phone": ""
         })
 
@@ -266,7 +261,7 @@ def analyze_video_route():
         return jsonify({"error": str(e)}), 500
     finally: gc.collect()
 
-# --- SHEET CONNECTION ---
+# --- GOOGLE SHEETS (Esto es gratis, se mantiene) ---
 def get_db_connection():
     creds_json = os.getenv("GOOGLE_CREDENTIALS_JSON")
     sheet_id = os.getenv("GOOGLE_SHEET_ID")
