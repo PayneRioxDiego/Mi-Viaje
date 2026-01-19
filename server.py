@@ -46,23 +46,7 @@ def get_db_connection():
         print(f"❌ Error Sheets: {e}")
         return None
 
-# --- 2. UTILIDAD DE REINTENTOS (Para evitar Error 500) ---
-def retry_operation(func, max_retries=3, delay=2):
-    """Intenta ejecutar una función varias veces antes de rendirse."""
-    last_exception = None
-    for i in range(max_retries):
-        try:
-            func()
-            return True # ¡Éxito!
-        except Exception as e:
-            last_exception = e
-            print(f"⚠️ Intento {i+1}/{max_retries} falló. Esperando {delay}s...")
-            time.sleep(delay)
-            delay *= 2 # Espera exponencial
-    print(f"❌ Error definitivo: {last_exception}")
-    return False
-
-# --- 3. VERIFICACIÓN CON GOOGLE MAPS ---
+# --- 2. VERIFICACIÓN CON GOOGLE MAPS ---
 def verify_location_with_maps(place_name, location_hint):
     if not MAPS_API_KEY: return None
     
@@ -91,14 +75,14 @@ def verify_location_with_maps(place_name, location_hint):
     except: pass
     return None
 
-# --- 4. DESCARGA DE VIDEO (Optimizada RAM) ---
+# --- 3. DESCARGA DE VIDEO (Optimizada RAM) ---
 def download_video(url):
     print(f"⬇️ Descargando: {url}")
     temp_dir = tempfile.mkdtemp()
     output_template = os.path.join(temp_dir, f'video_{int(time.time())}.%(ext)s')
     
     ydl_opts = {
-        'format': 'worst[ext=mp4]', # Baja calidad para ahorrar RAM
+        'format': 'worst[ext=mp4]', 
         'outtmpl': output_template,
         'quiet': True, 
         'no_warnings': True, 
@@ -114,7 +98,7 @@ def download_video(url):
         return files[0] if files else None
     except: return None
 
-# --- 5. ANÁLISIS MULTI-LUGAR GEMINI ---
+# --- 4. ANÁLISIS MULTI-LUGAR GEMINI ---
 def analyze_with_gemini(video_path):
     print(f"📤 Subiendo a Gemini...")
     video_file = None
@@ -162,7 +146,7 @@ def analyze_with_gemini(video_path):
     try: 
         if video_file: genai.delete_file(video_file.name)
     except: pass
-    gc.collect() # Limpiar RAM agresivamente
+    gc.collect() 
 
     # Asegurar que sea lista
     if isinstance(raw_data, dict): raw_data = [raw_data]
@@ -213,7 +197,7 @@ def analyze_video_route():
         if not video_path: return jsonify({"error": "Error descarga"}), 500
 
         results_list = analyze_with_gemini(video_path)
-        return jsonify(results_list) # Devuelve siempre una lista
+        return jsonify(results_list) 
     except Exception as e:
         return jsonify({"error": str(e)}), 500
     finally:
@@ -230,7 +214,7 @@ def get_history():
     clean = [r for r in raw if isinstance(r, dict)]
     return jsonify(clean)
 
-# --- GUARDADO INTELIGENTE (Fusión + Reintentos) ---
+# --- 5. GUARDADO OPTIMIZADO (BATCH / LOTE) ---
 @app.route('/api/history', methods=['POST'])
 def save_history():
     try:
@@ -240,44 +224,39 @@ def save_history():
         sheet = get_db_connection()
         if not sheet: return jsonify({"status": "local"})
 
-        # 1. Leer DB con reintentos
-        existing_records = []
-        def read_action():
-            nonlocal existing_records
-            existing_records = sheet.get_all_records()
-        
-        if not retry_operation(read_action):
-            return jsonify({"error": "Fallo al leer DB"}), 500
+        # 1. Leer DB (Rápido)
+        try: existing_records = sheet.get_all_records()
+        except: existing_records = []
 
-        # Mapa para búsqueda rápida
         name_map = {}
         for i, record in enumerate(existing_records):
             name = str(record.get('placeName', '')).strip().lower()
-            if name: name_map[name] = i + 2 # Fila real en Excel
+            if name: name_map[name] = i + 2
 
-        failed_items = []
+        # Listas para separar el trabajo
+        rows_to_create = [] # Aquí guardaremos todos los nuevos para subirlos juntos
+        updates_log = []    
 
         for item in new_items:
             new_name = str(item.get('placeName', '')).strip()
             key = new_name.lower()
 
             if key in name_map:
-                # --- FUSIÓN (Lugar ya existe) ---
+                # --- FUSIÓN (Update Individual) ---
+                # Las actualizaciones siguen siendo individuales pero protegidas
                 row_idx = name_map[key]
                 print(f"🔄 Fusionando: {new_name}...")
                 
                 try: old_record = existing_records[row_idx - 2]
                 except: old_record = {}
                 
-                # Promediar Score
+                # Cálculos
                 try: old_score = float(old_record.get('score') or 0)
                 except: old_score = 0
                 try: new_score = float(item.get('score') or 0)
                 except: new_score = 0
-                
                 final_score = new_score if old_score == 0 else round((old_score + new_score) / 2, 1)
 
-                # Sumar Resumen
                 old_summary = str(old_record.get('summary') or "")
                 new_summary = str(item.get('summary') or "")
                 date_str = time.strftime("%d/%m")
@@ -287,36 +266,38 @@ def save_history():
                 else:
                     final_summary = old_summary
 
-                # Acción de Actualización
-                def update_action():
-                    sheet.update_cell(row_idx, 5, final_score) # Score
-                    time.sleep(1)
-                    sheet.update_cell(row_idx, 7, final_summary) # Summary
-                
-                if not retry_operation(update_action):
-                    failed_items.append(new_name)
+                # Intentamos actualizar
+                try:
+                    sheet.update_cell(row_idx, 5, final_score)
+                    sheet.update_cell(row_idx, 7, final_summary)
+                    updates_log.append(new_name)
+                except Exception as e:
+                    print(f"⚠️ Error actualizando {new_name}: {e}")
 
             else:
-                # --- NUEVO (Lugar no existe) ---
-                print(f"🆕 Creando: {new_name}")
+                # --- NUEVO (A la cola de espera) ---
+                print(f"🆕 Preparando: {new_name}")
                 row = [
                     item.get('id'), item.get('timestamp'), item.get('placeName'),
                     item.get('category'), item.get('score'), item.get('estimatedLocation'),
                     item.get('summary'), item.get('fileName')
                 ]
-                
-                def append_action():
-                    sheet.append_row(row)
-                
-                if retry_operation(append_action):
-                    name_map[key] = len(existing_records) + 2 # Actualizar mapa local
-                else:
-                    failed_items.append(new_name)
+                rows_to_create.append(row)
 
-        if len(failed_items) > 0:
-            return jsonify({"status": "partial_error", "failed": failed_items}), 206
-        
-        return jsonify({"status": "saved"})
+        # 2. GRAN FINAL: Guardar todos los nuevos de un solo golpe (Batch)
+        if len(rows_to_create) > 0:
+            print(f"🚀 Enviando lote de {len(rows_to_create)} lugares nuevos...")
+            try:
+                sheet.append_rows(rows_to_create) # ¡Una sola llamada a la API!
+            except Exception as e:
+                print(f"❌ Error en guardado masivo: {e}")
+                return jsonify({"error": "Fallo guardado masivo"}), 500
+
+        return jsonify({
+            "status": "saved", 
+            "created": len(rows_to_create), 
+            "merged": updates_log
+        })
 
     except Exception as e:
         print(f"❌ Error Crítico Save: {e}")
