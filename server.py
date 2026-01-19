@@ -31,8 +31,7 @@ app = Flask(__name__, static_folder='dist', static_url_path='')
 CORS(app)
 
 # --- 0. DIAGNÓSTICO AL ARRANQUE (AUTO-DETECCIÓN) ---
-# Esto imprimirá en tus logs qué modelos REALMENTE tienes
-ACTIVE_MODEL_NAME = "gemini-pro" # Fallback por defecto
+ACTIVE_MODEL_NAME = "gemini-pro"
 
 def find_best_model():
     global ACTIVE_MODEL_NAME
@@ -41,15 +40,14 @@ def find_best_model():
     try:
         for m in genai.list_models():
             if 'generateContent' in m.supported_generation_methods:
-                print(f"   - Encontrado: {m.name}")
                 available_models.append(m.name)
         
-        # Lógica de preferencia (Busca el más nuevo disponible)
+        # Preferencia de modelos (De mejor a peor)
         preferred_order = [
-            'models/gemini-2.5-flash', 
-            'models/gemini-2.0-flash-exp', 
+            'models/gemini-2.0-flash-exp', # Lo más nuevo (a veces llamado 2.5)
             'models/gemini-1.5-pro-latest', 
             'models/gemini-1.5-flash-latest',
+            'models/gemini-1.5-flash',
             'models/gemini-pro'
         ]
         
@@ -59,15 +57,13 @@ def find_best_model():
                 print(f"🎯 MODELO SELECCIONADO: {ACTIVE_MODEL_NAME}")
                 return
         
-        # Si no encuentra los preferidos, usa el primero que sirva
         if available_models:
             ACTIVE_MODEL_NAME = available_models[0]
-            print(f"⚠️ Usando modelo genérico disponible: {ACTIVE_MODEL_NAME}")
+            print(f"⚠️ Usando modelo genérico: {ACTIVE_MODEL_NAME}")
             
     except Exception as e:
-        print(f"⚠️ Error listando modelos (posible error de API Key o Región): {e}")
+        print(f"⚠️ Error listando modelos: {e}")
 
-# Ejecutamos la búsqueda al iniciar el servidor
 find_best_model()
 
 # --- 1. GOOGLE SHEETS ---
@@ -111,30 +107,30 @@ def verify_location_with_maps(place_name, location_hint):
     except: pass
     return None
 
-# --- 3. DETECTIVE (A PRUEBA DE FALLOS) ---
+# --- 3. DETECTIVE (FORZADO A ESPAÑOL) ---
 def check_reputation_with_google(place_name, location):
     print(f"🕵️‍♂️ Investigando: {place_name}...")
     try:
-        # Intentamos usar el mismo modelo activo, o uno capaz de usar tools
         model = genai.GenerativeModel(ACTIVE_MODEL_NAME)
         
+        # PROMPT MODIFICADO: ORDEN ESTRICTA DE IDIOMA
         prompt = f"""
         Busca en Google: "{place_name}" "{location}" reviews tourist trap scam.
-        Responde SÓLO si encuentras advertencias graves de estafa. Si es seguro, responde "OK".
+        Analiza los resultados.
+        Responde ÚNICAMENTE en ESPAÑOL.
+        Si encuentras advertencias de estafa, descríbelas en 1 frase en ESPAÑOL.
+        Si es seguro, responde "OK".
         """
         
-        # Bloque try/except ESPECÍFICO para la herramienta de búsqueda
         try:
             response = model.generate_content(prompt, tools='google_search_retrieval')
             verdict = response.text.strip()
             if "OK" in verdict or not verdict: return ""
             return verdict
         except Exception as e:
-            print(f"⚠️ El modelo {ACTIVE_MODEL_NAME} no soporta búsqueda o falló: {e}")
-            return "" # Fallamos silenciosamente para no romper el análisis
+            return "" 
 
     except Exception as e:
-        print(f"⚠️ Error general detective: {e}")
         return ""
 
 # --- 4. VIDEO ---
@@ -157,9 +153,9 @@ def download_video(url):
         return files[0] if files else None
     except: return None
 
-# --- 5. ANÁLISIS (USANDO MODELO AUTO-DETECTADO) ---
+# --- 5. ANÁLISIS (FORZADO A ESPAÑOL) ---
 def analyze_with_gemini(video_path):
-    print(f"📤 Subiendo video a Gemini...")
+    print(f"📤 Subiendo video...")
     video_file = None
     try:
         video_file = genai.upload_file(path=video_path)
@@ -168,27 +164,31 @@ def analyze_with_gemini(video_path):
             video_file = genai.get_file(video_file.name)
     except Exception as e: raise Exception(f"Error Upload: {e}")
 
-    print(f"🤖 Analizando con modelo: {ACTIVE_MODEL_NAME} ...")
+    print(f"🤖 Analizando con: {ACTIVE_MODEL_NAME}")
     
     try: 
         model = genai.GenerativeModel(model_name=ACTIVE_MODEL_NAME)
     except:
-        # Último recurso
         model = genai.GenerativeModel(model_name="gemini-pro")
 
+    # PROMPT MODIFICADO: ORDEN ESTRICTA DE IDIOMA
     prompt = """
     Analiza este video. Identifica TODOS los lugares turísticos.
+    
+    CRITICAL INSTRUCTION: All text values MUST be in SPANISH.
+    INSTRUCCIÓN CRÍTICA: Todos los valores de texto (resumen, opinion, nombre) DEBEN ser en ESPAÑOL.
+    
     Responde ÚNICAMENTE con JSON Array.
     Plantilla:
     [{
-      "category": "Lugar",
-      "placeName": "Nombre",
+      "category": "Lugar / Comida / Alojamiento",
+      "placeName": "Nombre del lugar",
       "estimatedLocation": "Ciudad, País",
-      "priceRange": "Precio",
-      "summary": "Resumen",
+      "priceRange": "Gratis / Barato / Caro",
+      "summary": "Resumen detallado en ESPAÑOL de lo que dice el video",
       "score": 5,
       "confidenceLevel": "Alto",
-      "criticalVerdict": "Opinión",
+      "criticalVerdict": "Opinión crítica en ESPAÑOL",
       "isTouristTrap": false
     }]
     """
@@ -217,7 +217,7 @@ def analyze_with_gemini(video_path):
         final_name = maps_data["officialName"] if maps_data else guessed_name
         final_loc = maps_data["address"] if maps_data else guessed_loc
 
-        # Detective Seguro (No rompe si falla)
+        # Detective
         web_verdict = ""
         is_trap_confirmed = False
         if final_name != "Desconocido":
@@ -285,10 +285,10 @@ def save_history():
             name = str(item.get('placeName', '')).strip()
             key = name.lower()
             if key in name_map:
-                # Update simple
                 try:
                     row_idx = name_map[key]
                     sheet.update_cell(row_idx, 5, item.get('score'))
+                    # Solo actualizamos el resumen si es diferente para ahorrar tiempo
                     sheet.update_cell(row_idx, 7, str(item.get('summary'))[:4500])
                 except: pass
             else:
