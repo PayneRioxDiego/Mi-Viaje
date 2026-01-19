@@ -90,27 +90,33 @@ def get_unsplash_photo(query):
     except: pass
     return ""
 
-# --- 3. MAPAS GRATIS (NOMINATIM / OSM) ---
-# --- 3. MAPAS GRATIS (NOMINATIM / OSM) - VERSIÓN "INSISTENTE" ---
+# --- 3. MAPAS INTELIGENTES (NOMINATIM + FALLBACK BÚSQUEDA) ---
 def verify_location_opensource(place_name, location_hint):
     headers = { 'User-Agent': 'TravelHunterApp/2.0' }
     
-    # Lista de intentos de búsqueda (de más específico a más general)
+    # 1. Limpieza de palabras "ruido" que confunden al mapa
+    # Quitamos "Tour", "Full Day", etc. para dejar solo el nombre real
+    clean_name = place_name
+    noise_words = ["tour", "full day", "trekking", "caminata", "visita", "excursion", "viaje a"]
+    for word in noise_words:
+        clean_name = clean_name.lower().replace(word, "").strip()
+    
+    # 2. Lista de intentos (De lo más específico a lo más simple)
+    # IMPORTANTE: Ya NO buscamos solo por 'location_hint' (Ciudad) para evitar el error de la Plaza de Armas
     search_queries = [
-        f"{place_name} {location_hint}",  # Intento 1: Nombre + Ciudad (Ej: Huacachina Ica)
-        place_name,                       # Intento 2: Solo Nombre (Ej: Huacachina)
-        location_hint                     # Intento 3: Solo Ciudad (Para no dejar sin mapa, aunque sea general)
+        f"{clean_name} {location_hint}",  # Ej: Pallay Punchu Cusco
+        clean_name,                       # Ej: Pallay Punchu
+        place_name                        # Ej: Montaña de Colores Pallay Punchu (Nombre original)
     ]
 
     best_result = None
+    print(f"🌍 Buscando coordenada exacta para '{place_name}'...", flush=True)
 
-    print(f"🌍 Buscando mapa para '{place_name}'...", flush=True)
-
+    # Intentamos encontrar coordenada exacta en OSM
     for query in search_queries:
         try:
-            # Si el query es muy corto o vacío, lo saltamos
-            if len(query) < 3: continue
-
+            if len(query) < 4: continue # Saltamos búsquedas muy cortas
+            
             url = "https://nominatim.openstreetmap.org/search"
             params = { 'q': query, 'format': 'json', 'limit': 1 }
             
@@ -118,14 +124,55 @@ def verify_location_opensource(place_name, location_hint):
             data = response.json()
             
             if data and len(data) > 0:
+                # ¡Éxito! Encontramos una coordenada específica
                 best_result = data[0]
-                print(f"   ✅ Encontrado con: '{query}'", flush=True)
-                break # ¡Éxito! Dejamos de buscar
+                print(f"   ✅ Coordenada encontrada con: '{query}'", flush=True)
+                break 
             else:
-                print(f"   ⚠️ Falló con: '{query}'", flush=True)
-                time.sleep(1) # Pequeña pausa para no saturar a OSM
+                # Pequeña pausa para no saturar
+                time.sleep(0.5)
         except: pass
 
+    # 3. CONSTRUCCIÓN DE LA RESPUESTA
+    
+    # Foto Temática (Siempre la buscamos, independiente del mapa)
+    photo_keyword = f"{clean_name} {location_hint} travel"
+    photo_url = get_unsplash_photo(photo_keyword)
+
+    if best_result:
+        # CASO A: Tenemos coordenada exacta
+        lat, lon = best_result.get('lat'), best_result.get('lon')
+        maps_link = f"https://www.google.com/maps/search/?api=1&query={lat},{lon}"
+        
+        return {
+            "officialName": place_name, 
+            "address": best_result.get('display_name', location_hint),
+            "placeId": str(best_result.get('place_id', 'osm')),
+            "lat": lat, "lng": lon,
+            "photoUrl": photo_url,
+            "rating": 0, "reviews": 0, "website": "", 
+            "mapsLink": maps_link, "openNow": "", "phone": ""
+        }
+    else:
+        # CASO B: No encontramos coordenada (El Plan B Maestro)
+        # En vez de devolver "Sin Mapa" o una coordenada falsa, devolvemos un LINK DE BÚSQUEDA.
+        print(f"   ⚠️ No hay coordenada exacta. Generando enlace de búsqueda manual.", flush=True)
+        
+        # Este link abrirá Google Maps buscando el texto, lo cual es mucho más seguro
+        search_safe = urllib.parse.quote(f"{place_name} {location_hint}")
+        search_link = f"https://www.google.com/maps/search/?api=1&query={search_safe}"
+
+        return {
+            "officialName": place_name,
+            "address": location_hint,
+            "placeId": "manual_search",
+            "lat": "", "lng": "",
+            "photoUrl": photo_url, # La foto sí la ponemos
+            "rating": 0, "reviews": 0, "website": "", 
+            "mapsLink": search_link, # <--- AQUÍ ESTÁ EL TRUCO
+            "openNow": "", "phone": ""
+        }
+        
     # Procesamos el resultado (si encontramos algo en alguno de los intentos)
     if best_result:
         lat, lon = best_result.get('lat'), best_result.get('lon')
