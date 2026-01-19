@@ -12,21 +12,20 @@ COPY . .
 RUN npm run build
 
 # --- ETAPA 2: Servidor (Python 3.11) ---
-# CAMBIO: Usamos 3.11 para estar al día y evitar warnings
 FROM python:3.11-slim
 
-# Instalamos ffmpeg
+# Instalamos ffmpeg (Necesario para procesar video)
 RUN apt-get update && \
     apt-get install -y ffmpeg && \
     apt-get clean
 
 WORKDIR /app
 
-# Instalamos dependencias (ahora con versiones fijas del requirements.txt)
+# Instalamos dependencias
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copiamos todo lo demás
+# Copiamos todo lo demás (incluido el frontend construido)
 COPY --from=build-step /app/dist ./dist
 COPY . .
 
@@ -36,6 +35,6 @@ ENV PORT=5000
 
 EXPOSE 5000
 
-# CAMBIO FINAL: Usamos Gunicorn en lugar de python directo
-# Esto es mucho más robusto para producción y evita el "Exited Early"
-CMD ["gunicorn", "--bind", "0.0.0.0:5000", "server:app"]
+# --- CAMBIO CRÍTICO AQUÍ ---
+# Usamos python directo para ahorrar memoria RAM y evitar error de dependencia
+CMD ["python", "server.py"]
