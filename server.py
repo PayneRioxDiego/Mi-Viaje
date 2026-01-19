@@ -22,7 +22,7 @@ MAPS_API_KEY = os.getenv("GOOGLE_MAPS_API_KEY")
 # Configuración Gemini
 if not API_KEY: print("❌ ERROR: API_KEY not found.")
 try: genai.configure(api_key=API_KEY)
-except Exception as e: print(f"❌ Error Gemini: {e}")
+except Exception as e: print(f"❌ Error Gemini Config: {e}")
 
 app = Flask(__name__, static_folder='dist', static_url_path='')
 CORS(app)
@@ -70,17 +70,13 @@ def verify_location_with_maps(place_name, location_hint):
     except: pass
     return None
 
-# --- 3. INVESTIGADOR DE REPUTACIÓN (Búsqueda Web) ---
+# --- 3. INVESTIGADOR DE REPUTACIÓN (Solo Modelos Nuevos) ---
 def check_reputation_with_google(place_name, location):
     print(f"🕵️‍♂️ Investigando reputación de: {place_name}...")
     
-    # LISTA DE MODELOS A PROBAR (Prioridad 2.5 Flash según tu captura)
-    candidate_models = [
-        'gemini-2.5-flash',       # Tu modelo nuevo
-        'gemini-1.5-flash-latest',
-        'gemini-1.5-flash',
-        'gemini-1.5-pro'
-    ]
+    # Solo intentamos con la nueva generación. Si falla, no hay backup.
+    # Probamos el nombre comercial y el técnico por si acaso.
+    candidate_models = ['gemini-2.5-flash', 'gemini-2.0-flash-exp']
 
     for model_name in candidate_models:
         try:
@@ -92,8 +88,6 @@ def check_reputation_with_google(place_name, location):
             Responde en 1 frase corta en ESPAÑOL: ¿Es legítimo o hay advertencias de estafa?
             """
             
-            # Intentamos usar la herramienta de búsqueda
-            # Nota: Si 2.5 aún no soporta tools en API pública, fallará y saltará al 1.5
             response = model.generate_content(
                 prompt,
                 tools='google_search_retrieval'
@@ -104,10 +98,10 @@ def check_reputation_with_google(place_name, location):
             return verdict
             
         except Exception as e:
-            # Si falla este modelo, continuamos al siguiente silenciosamente
+            # Si es un error de modelo no encontrado, probamos el siguiente de la lista 2.X
             continue
 
-    print("⚠️ No se pudo conectar con Google Search (Modelos ocupados o no disponibles).")
+    print("⚠️ No se pudo conectar con Google Search (Modelos 2.X no respondieron).")
     return ""
 
 # --- 4. DESCARGA DE VIDEO ---
@@ -130,7 +124,7 @@ def download_video(url):
         return files[0] if files else None
     except: return None
 
-# --- 5. ANÁLISIS PRINCIPAL (Usa Gemini 2.5) ---
+# --- 5. ANÁLISIS PRINCIPAL (PURO 2.5) ---
 def analyze_with_gemini(video_path):
     print(f"📤 Subiendo a Gemini...")
     video_file = None
@@ -141,18 +135,17 @@ def analyze_with_gemini(video_path):
             video_file = genai.get_file(video_file.name)
     except Exception as e: raise Exception(f"Error Gemini Upload: {e}")
 
-    print("🤖 Analizando Video...")
+    print("🤖 Analizando Video (Motor Next-Gen)...")
     
-    # INTENTO PRIORITARIO CON GEMINI 2.5
+    # Lógica estricta: Solo intentamos cargar el modelo 2.5 Flash
+    # Si falla, lanzará error y lo veremos en el log (mejor que usar un modelo viejo)
     try: 
         model = genai.GenerativeModel(model_name="gemini-2.5-flash")
         print("⚡ Usando Gemini 2.5 Flash")
     except: 
-        try:
-            model = genai.GenerativeModel(model_name="gemini-1.5-flash-latest")
-            print("⚡ Usando Gemini 1.5 Flash Latest")
-        except:
-            model = genai.GenerativeModel(model_name="gemini-1.5-flash")
+        # Fallback SOLO al nombre técnico de la misma versión (no versiones viejas)
+        print("⚠️ '2.5-flash' no respondió, intentando '2.0-flash-exp'...")
+        model = genai.GenerativeModel(model_name="gemini-2.0-flash-exp")
     
     prompt = """
     Analiza este video. Identifica TODOS los lugares turísticos.
@@ -176,7 +169,9 @@ def analyze_with_gemini(video_path):
         response = model.generate_content([video_file, prompt], generation_config={"response_mime_type": "application/json"})
         clean_text = response.text.replace("```json", "").replace("```", "").strip()
         raw_data = json.loads(clean_text)
-    except: raw_data = []
+    except Exception as e:
+        print(f"❌ Error Generación: {e}")
+        raw_data = []
     
     try: 
         if video_file: genai.delete_file(video_file.name)
@@ -190,19 +185,17 @@ def analyze_with_gemini(video_path):
         guessed_name = str(item.get("placeName") or "Desconocido")
         guessed_loc = str(item.get("estimatedLocation") or "")
         
-        # 1. VERIFICAR EN MAPS
+        # 1. MAPS
         maps_data = verify_location_with_maps(guessed_name, guessed_loc)
-        
         final_name = maps_data["officialName"] if maps_data else guessed_name
         final_loc = maps_data["address"] if maps_data else guessed_loc
 
-        # 2. INVESTIGAR EN WEB
+        # 2. WEB SEARCH (Detective)
         web_verdict = ""
         is_trap_confirmed = False
         if final_name != "Desconocido":
-            # Llamamos a la función de búsqueda
             web_verdict = check_reputation_with_google(final_name, final_loc)
-            if "trampa" in web_verdict.lower() or "estafa" in web_verdict.lower() or "cuidado" in web_verdict.lower():
+            if any(x in web_verdict.lower() for x in ["trampa", "estafa", "cuidado", "scam"]):
                 is_trap_confirmed = True
 
         video_summary = str(item.get("summary") or "")
@@ -251,8 +244,6 @@ def get_history():
     clean = [r for r in raw if isinstance(r, dict)]
     return jsonify(clean)
 
-# --- GUARDADO EN LOTE (BATCH) ---
-# Esto soluciona el Timeout que se ve en tu log
 @app.route('/api/history', methods=['POST'])
 def save_history():
     try:
@@ -295,7 +286,6 @@ def save_history():
                 else: final_summary = old_summary
 
                 try:
-                    # Actualizamos individualmente porque es rápido si son pocos
                     sheet.update_cell(row_idx, 5, final_score)
                     sheet.update_cell(row_idx, 7, final_summary)
                     updates_log.append(new_name)
@@ -308,10 +298,9 @@ def save_history():
                 ]
                 rows_to_create.append(row)
 
-        # Aquí ocurre la magia antibloqueo: Guardamos todos los nuevos JUNTOS
         if len(rows_to_create) > 0:
             try: sheet.append_rows(rows_to_create)
-            except: return jsonify({"error": "Fallo guardado"}), 500
+            except: return jsonify({"error": "Fallo guardado batch"}), 500
 
         return jsonify({"status": "saved", "created": len(rows_to_create)})
 
