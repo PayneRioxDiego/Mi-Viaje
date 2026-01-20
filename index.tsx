@@ -1,6 +1,7 @@
 import React from 'react';
 import ReactDOM from 'react-dom/client';
 import App from './App';
+import './index.css'; // <--- ¡ESTA LÍNEA ES LA QUE LE PONE "ROPA" A TU APP!
 
 const rootElement = document.getElementById('root');
 if (!rootElement) {
