@@ -22,7 +22,7 @@ load_dotenv()
 API_KEY = os.getenv("API_KEY")
 UNSPLASH_KEY = os.getenv("UNSPLASH_ACCESS_KEY") 
 
-print("🚀 INICIANDO MODO TURBO (PARALELO)...", flush=True)
+print("🚀 INICIANDO MODO TURBO (PARALELO + ESPAÑOL)...", flush=True)
 
 if not API_KEY: 
     print("❌ FATAL: API_KEY no encontrada.", flush=True)
@@ -61,9 +61,13 @@ def get_unsplash_photo(query):
     except: pass
     return ""
 
-# --- 3. MAPAS HÍBRIDOS (OSM + IA) - OPTIMIZADO ---
+# --- 3. MAPAS HÍBRIDOS (OSM + IA) - OPTIMIZADO EN ESPAÑOL ---
 def verify_location_hybrid(place_name, location_hint, ai_lat=None, ai_lng=None):
-    headers = { 'User-Agent': 'TravelHunterApp/Turbo' }
+    # HEADER CORREGIDO: Forzamos idioma Español para los resultados de mapas
+    headers = { 
+        'User-Agent': 'TravelHunterApp/Turbo',
+        'Accept-Language': 'es-ES,es;q=0.9' 
+    }
     
     clean_name = place_name
     for word in ["tour", "full day", "trekking", "caminata", "visita", "excursion", "viaje a"]:
@@ -104,6 +108,7 @@ def verify_location_hybrid(place_name, location_hint, ai_lat=None, ai_lng=None):
     # Foto en paralelo (dentro del hilo)
     photo_url = get_unsplash_photo(f"{clean_name} {location_hint} travel")
     
+    # GENERACIÓN DE LINK CORREGIDA: Solo generamos link si hay coordenadas reales
     if final_lat and final_lng:
         maps_link = f"https://www.google.com/maps/search/?api=1&query={final_lat},{final_lng}"
     else:
@@ -118,7 +123,7 @@ def verify_location_hybrid(place_name, location_hint, ai_lat=None, ai_lng=None):
         "mapsLink": maps_link
     }
 
-# --- 4. PROCESAMIENTO PARALELO (NUEVO) ---
+# --- 4. PROCESAMIENTO PARALELO ---
 def process_single_item(item):
     """Procesa UN solo item (Mapa + Foto). Esta función correrá en paralelo."""
     try:
@@ -184,11 +189,27 @@ def analyze_with_gemini(video_path):
     print(f"🤖 Analizando con {active_model}...", flush=True)
     model = genai.GenerativeModel(model_name=active_model)
 
+    # PROMPT CORREGIDO: Estricto con el idioma y las coordenadas
     prompt = """
-    Analiza este video de viaje. Identifica TODOS los lugares turísticos.
-    IMPORTANTE: Estima coordenadas GPS (lat, lng) para cada lugar.
-    OUTPUT: JSON Array ONLY. NO Markdown.
-    Structure: {"category": "...", "placeName": "...", "estimatedLocation": "...", "gps": {"lat": 0.0, "lng": 0.0}, "priceRange": "...", "summary": "...", "score": 4.5, "isTouristTrap": boolean}
+    Eres un experto guía de viajes local. Analiza este video.
+    Identifica TODOS los lugares turísticos mostrados.
+    
+    REGLAS OBLIGATORIAS:
+    1. IDIOMA: TODA la respuesta (nombres, resumen, categorias) DEBE ser en ESPAÑOL LATINO.
+    2. COORDENADAS: Estima latitud y longitud (gps) para CADA lugar. Si no es exacto, estima la ciudad. NUNCA lo dejes vacio.
+    
+    OUTPUT: JSON Array ONLY. 
+    Structure:
+    {
+      "category": "Comida/Alojamiento/Actividad/Paisaje",
+      "placeName": "Nombre en Español",
+      "estimatedLocation": "Ciudad, País (en Español)",
+      "gps": { "lat": -0.0000, "lng": -0.0000 }, 
+      "priceRange": "Gratis/Barato/Moderado/Caro",
+      "summary": "Resumen atractivo y útil en español (máx 20 palabras)",
+      "score": 4.5,
+      "isTouristTrap": boolean
+    }
     """
     
     try:
