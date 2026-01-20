@@ -23,7 +23,7 @@ function App() {
   const [history, setHistory] = useState<TravelAnalysis[]>([]);
   const [error, setError] = useState('');
   
-  // --- SISTEMA DE FILTROS (Se mantiene porque es muy útil) ---
+  // --- SISTEMA DE FILTROS ---
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedCategory, setSelectedCategory] = useState('Todas');
 
@@ -52,17 +52,35 @@ function App() {
     } catch (e) { console.error("Error cargando historial", e); }
   };
 
-  // Lógica de Filtrado para el Mapa y las Tarjetas
+  // --- LÓGICA DE FILTRADO INTELIGENTE ---
   const filteredHistory = history.filter(item => {
+      // 1. Buscador de Texto
       const matchesSearch = (item.placeName || '').toLowerCase().includes(searchTerm.toLowerCase()) || 
                             (item.estimatedLocation || '').toLowerCase().includes(searchTerm.toLowerCase());
-      const matchesCategory = selectedCategory === 'Todas' || item.category === selectedCategory;
+      
+      // 2. Filtro de Categoría (INCLUSIVO)
+      // Usamos .includes() para que si el dato viejo es "Naturaleza/Educación", 
+      // el filtro "Naturaleza" lo capture igual.
+      const matchesCategory = selectedCategory === 'Todas' || (item.category || '').includes(selectedCategory);
+
       return matchesSearch && matchesCategory;
   });
 
-  const uniqueCategories = ['Todas', ...new Set(history.map(item => item.category || 'General'))];
+  // --- LISTA OFICIAL DE LAS 8 CATEGORÍAS SAGRADAS ---
+  // Esto mantiene el menú limpio y ordenado, ignorando categorías basura antiguas
+  const categoriesForFilter = [
+    'Todas', 
+    'Naturaleza', 
+    'Cultura', 
+    'Gastronomía', 
+    'Aventura', 
+    'Alojamiento', 
+    'Compras', 
+    'Urbano', 
+    'Servicios'
+  ];
 
-  // --- ANÁLISIS MANUAL (Un solo link a la vez) ---
+  // --- ANÁLISIS MANUAL ---
   const handleAnalyze = async () => {
     if (!url) return;
     setLoading(true); setError('');
@@ -107,7 +125,7 @@ function App() {
     return 'bg-amber-400 text-white shadow-amber-200';
   };
 
-  // Componente de Filtros (Buscador + Categoría)
+  // Componente de Filtros
   const FilterBar = () => (
     <div className="bg-white p-3 rounded-2xl shadow-sm border border-slate-200 mb-6 flex flex-col sm:flex-row gap-3 items-center sticky top-20 z-10">
         <div className="relative flex-grow w-full">
@@ -128,7 +146,8 @@ function App() {
                 onChange={(e) => setSelectedCategory(e.target.value)}
                 className="w-full sm:w-48 py-2 px-3 rounded-xl bg-slate-50 border-transparent focus:bg-white focus:ring-2 focus:ring-indigo-500 text-sm"
             >
-                {uniqueCategories.map(cat => <option key={cat} value={cat}>{cat}</option>)}
+                {/* Usamos la lista OFICIAL aquí */}
+                {categoriesForFilter.map(cat => <option key={cat} value={cat}>{cat}</option>)}
             </select>
         </div>
     </div>
@@ -187,7 +206,6 @@ function App() {
             <div className="text-center max-w-2xl mx-auto mb-10 mt-8"> <h1 className="text-4xl font-black text-slate-800 tracking-tight mb-3">¿Joya o Trampa?</h1> <p className="text-slate-500">Pega un link de TikTok o Instagram para descubrirlo.</p> </div>
             <div className="max-w-2xl mx-auto mb-12">
               <div className="bg-white p-2 rounded-2xl shadow-xl shadow-indigo-100/50 flex flex-col sm:flex-row items-center border border-slate-100"> 
-                  {/* --- VUELVE EL INPUT SENCILLO --- */}
                   <input type="text" className="w-full pl-6 pr-4 py-3 rounded-xl border-none focus:ring-0 text-slate-700 placeholder:text-slate-300" placeholder="https://www.tiktok.com/..." value={url} onChange={(e) => setUrl(e.target.value)} />
                   <button onClick={handleAnalyze} disabled={loading || !url} className="w-full sm:w-auto mt-2 sm:mt-0 bg-indigo-600 hover:bg-indigo-700 text-white px-6 py-3 rounded-xl font-bold transition-all flex items-center justify-center gap-2 shadow-lg shadow-indigo-200"> {loading ? <Loader2 className="animate-spin h-5 w-5" /> : 'Analizar'} </button> 
               </div>
@@ -201,7 +219,6 @@ function App() {
         {activeTab === 'cards' && (
           <div className="animate-fade-in">
              <div className="flex items-center justify-between mb-8"> <h2 className="text-2xl font-black text-slate-800">Tu Colección de Viajes</h2> <span className="bg-indigo-100 text-indigo-700 font-bold px-3 py-1 rounded-full text-xs">{filteredHistory.length} Destinos</span> </div>
-             {/* --- BARRA DE FILTROS --- */}
              <FilterBar />
              {filteredHistory.length > 0 ? ( <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6"> {filteredHistory.map((item) => <TravelCard key={`hist-${item.id}`} item={item} />)} </div> ) : ( <div className="text-center py-20 text-slate-400"><p>No hay viajes que coincidan con tu búsqueda.</p></div> )}
           </div>
@@ -209,7 +226,6 @@ function App() {
 
         {activeTab === 'map' && (
           <div className="animate-fade-in h-[calc(100vh-180px)] relative">
-             {/* --- FILTROS FLOTANTES EN EL MAPA --- */}
              <div className="absolute top-4 left-4 right-4 z-[1000] max-w-xl mx-auto">
                 <FilterBar />
              </div>
