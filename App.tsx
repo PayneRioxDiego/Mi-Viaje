@@ -2,6 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { Search, MapPin, AlertTriangle, Loader2, ChevronRight, Camera, Grid, Map as MapIcon, Layers, MessageCircle, Send } from 'lucide-react';
 import MapComponent from './MapComponent'; 
 
+// --- Interfaces de Tipos ---
 interface TravelAnalysis {
   id: string; category: string; placeName: string; estimatedLocation: string;
   priceRange: string; summary: string; score: number; confidenceLevel: string;
@@ -10,7 +11,6 @@ interface TravelAnalysis {
   openNow?: string; lat?: number; lng?: number;
 }
 
-// Interfaz para el chat
 interface ChatMessage {
   role: 'user' | 'bot';
   text: string;
@@ -194,30 +194,4 @@ function App() {
                 )}
                 <div ref={chatEndRef} />
              </div>
-             <div className="p-4 bg-white border-t border-slate-100">
-                <div className="flex gap-2">
-                    <input 
-                        type="text" 
-                        value={inputMsg}
-                        onChange={(e) => setInputMsg(e.target.value)}
-                        onKeyPress={(e) => e.key === 'Enter' && handleSendChat()}
-                        placeholder="Ej: Planea un viaje de 3 días a Cusco..." 
-                        className="flex-grow px-4 py-3 rounded-xl bg-slate-100 border-transparent focus:bg-white focus:ring-2 focus:ring-indigo-500 transition-all text-sm"
-                    />
-                    <button 
-                        onClick={handleSendChat}
-                        disabled={chatLoading || !inputMsg.trim()}
-                        className="bg-indigo-600 hover:bg-indigo-700 text-white p-3 rounded-xl transition-all disabled:opacity-50 disabled:cursor-not-allowed"
-                    >
-                        <Send className="h-5 w-5" />
-                    </button>
-                </div>
-             </div>
-          </div>
-        )}
-      </div>
-    </div>
-  );
-}
-
-export default App;
+             <div className="p-4 bg-white border-t border-slate
