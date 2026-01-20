@@ -22,7 +22,7 @@ load_dotenv()
 API_KEY = os.getenv("API_KEY")
 UNSPLASH_KEY = os.getenv("UNSPLASH_ACCESS_KEY") 
 
-print("🚀 INICIANDO: PRECIOS REALES + MAPA ARREGLADO...", flush=True)
+print("🚀 INICIANDO: OPCIÓN 2 (COLUMNAS LAT/LNG REALES)...", flush=True)
 
 if not API_KEY: print("❌ FATAL: API_KEY no encontrada.", flush=True)
 else:
@@ -32,11 +32,9 @@ else:
 app = Flask(__name__, static_folder='dist', static_url_path='')
 CORS(app)
 
-# --- 1. MODELO ---
 def get_best_model():
     return "gemini-2.5-flash"
 
-# --- 2. FOTOS (UNSPLASH) ---
 def get_unsplash_photo(query):
     if not UNSPLASH_KEY: return ""
     try:
@@ -50,14 +48,12 @@ def get_unsplash_photo(query):
     except: pass
     return ""
 
-# --- 3. LÓGICA DE UBICACIÓN ---
 def verify_location_hybrid(place_name, location_hint, ai_lat=None, ai_lng=None):
-    
     final_lat = ai_lat
     final_lng = ai_lng
     final_address = f"{place_name}, {location_hint}"
     
-    # Si la IA falló (0.0), intentamos OSM
+    # Si la IA falló, intentamos OSM
     if not final_lat or not final_lng or final_lat == 0:
         headers = { 'User-Agent': 'TravelHunterApp/2.0', 'Accept-Language': 'es-ES' }
         try:
@@ -73,16 +69,14 @@ def verify_location_hybrid(place_name, location_hint, ai_lat=None, ai_lng=None):
                 final_address = data[0].get('display_name')
         except: pass
 
-    # Foto
     photo_url = get_unsplash_photo(f"{place_name} {location_hint} travel")
     
-    # --- LINK HÍBRIDO (CLIC + PIN) ---
+    # LINK PARA EL USUARIO (SOLO CLIC, YA NO LLEVA DATOS OCULTOS)
     if final_lat and final_lng and final_lat != 0:
-        # El #/0 es el secreto para tu frontend. Lo anterior es para Google Maps normal.
-        maps_link = f"http://googleusercontent.com/maps.google.com/maps?q={final_lat},{final_lng}#/0{final_lat},{final_lng}"
+        maps_link = f"https://www.google.com/maps/search/?api=1&query={final_lat},{final_lng}"
     else:
         safe = urllib.parse.quote(f"{place_name} {location_hint}")
-        maps_link = f"http://googleusercontent.com/maps.google.com/search?q={safe}"
+        maps_link = f"https://www.google.com/maps/search/?api=1&query={safe}"
 
     return {
         "officialName": place_name,
@@ -92,16 +86,13 @@ def verify_location_hybrid(place_name, location_hint, ai_lat=None, ai_lng=None):
         "mapsLink": maps_link
     }
 
-# --- 4. PROCESAMIENTO PARALELO ---
 def process_single_item(item):
     try:
         guessed_name = str(item.get("placeName") or "Desconocido")
         guessed_loc = str(item.get("estimatedLocation") or "")
         
         def clean_coord(val):
-            try:
-                val = str(val).replace(',', '.') 
-                return float(val)
+            try: return float(str(val).replace(',', '.'))
             except: return 0.0
 
         ai_lat = clean_coord(item.get("lat", 0))
@@ -109,16 +100,7 @@ def process_single_item(item):
         
         geo_data = verify_location_hybrid(guessed_name, guessed_loc, ai_lat, ai_lng)
         
-        # CATEGORÍAS EN ESPAÑOL
-        cat_map = {
-            "Wildlife/Nature Attraction": "Naturaleza",
-            "Nature": "Naturaleza",
-            "Landmark": "Monumento",
-            "Historical Site": "Historia",
-            "Food": "Gastronomía",
-            "Adventure": "Aventura",
-            "Viewpoint": "Mirador"
-        }
+        cat_map = { "Wildlife/Nature Attraction": "Naturaleza", "Nature": "Naturaleza", "Landmark": "Monumento", "Historical Site": "Historia", "Food": "Gastronomía", "Adventure": "Aventura", "Viewpoint": "Mirador" }
         raw_cat = str(item.get("category") or "Otro")
         final_cat = cat_map.get(raw_cat, raw_cat) 
 
@@ -128,20 +110,21 @@ def process_single_item(item):
             "category": final_cat,
             "placeName": geo_data["officialName"],
             "estimatedLocation": geo_data["address"],
-            "priceRange": str(item.get("priceRange") or "N/A"), # Ahora vendrá con precios reales
+            "priceRange": str(item.get("priceRange") or "N/A"),
             "summary": str(item.get("summary") or ""),
             "score": item.get("score") or 0,
             "isTouristTrap": bool(item.get("isTouristTrap")),
             "fileName": "Video TikTok",
             "photoUrl": geo_data["photoUrl"],
-            "mapsLink": geo_data["mapsLink"],
+            "mapsLink": geo_data["mapsLink"], # Link limpio
+            "lat": geo_data["lat"], # Dato crudo
+            "lng": geo_data["lng"], # Dato crudo
             "confidenceLevel": "Alto", "criticalVerdict": "", "realRating": 0, "website": "", "openNow": ""
         }
     except Exception as e:
         print(f"⚠️ Error item: {e}")
         return None
 
-# --- 5. ANÁLISIS ---
 def download_video(url):
     print(f"⬇️ Descargando: {url}", flush=True)
     temp_dir = tempfile.mkdtemp()
@@ -157,50 +140,28 @@ def download_video(url):
 def analyze_with_gemini(video_path):
     print(f"📤 Subiendo...", flush=True)
     video_file = genai.upload_file(path=video_path)
-    
     while video_file.state.name == "PROCESSING":
         time.sleep(1)
         video_file = genai.get_file(video_file.name)
         
     model = genai.GenerativeModel(model_name="gemini-2.5-flash")
-
-    # --- PROMPT MEJORADO PARA PRECIOS ---
     prompt = """
     Analiza este video de viajes.
-    
-    OBJETIVO: Extraer datos estructurados en JSON.
-    
-    REGLAS DE IDIOMA (ESPAÑOL):
-    - "category": USA SOLO: "Naturaleza", "Historia", "Comida", "Aventura", "Cultura", "Mirador".
-    - "summary": Escribe un resumen atractivo en ESPAÑOL.
-    
-    REGLA DE PRECIOS (IMPORTANTE):
-    - "priceRange": Extrae el PRECIO EXACTO si se menciona (ej: "$5 USD", "20€", "Gratis"). 
-       Si no se menciona, estima un rango realista en USD. NO uses adjetivos como "Barato".
-    
-    REGLA DE MAPA:
-    - Estima latitud (lat) y longitud (lng) numéricas exactas para CADA lugar.
+    OBJETIVO: Extraer datos JSON.
+    IDIOMA: Español.
+    MAPA: Latitud (lat) y Longitud (lng) numéricas.
+    PRECIO: Valor real (ej: "$5 USD") si existe.
     
     OUTPUT JSON:
-    [
-      {
-        "category": "Historia", 
-        "placeName": "Torre Eiffel", 
-        "estimatedLocation": "París, Francia", 
-        "lat": 48.858, 
-        "lng": 2.294, 
-        "priceRange": "Aprox $30 USD", 
-        "summary": "Famosa torre con vistas increíbles.", 
-        "score": 4.5, 
-        "isTouristTrap": false
-      }
-    ]
+    [{
+      "category": "Historia", "placeName": "...", "estimatedLocation": "...", 
+      "lat": -13.163, "lng": -72.545, 
+      "priceRange": "$20 USD", "summary": "...", "score": 4.5, "isTouristTrap": false
+    }]
     """
-    
     try:
         response = model.generate_content([video_file, prompt], generation_config={"response_mime_type": "application/json"})
-        clean = response.text.replace("```json", "").replace("```", "").strip()
-        raw_data = json.loads(clean)
+        raw_data = json.loads(response.text.replace("```json", "").replace("```", "").strip())
     except Exception as e:
         print(f"❌ Error IA: {e}", flush=True)
         raw_data = []
@@ -209,17 +170,14 @@ def analyze_with_gemini(video_path):
     except: pass
 
     if isinstance(raw_data, dict): raw_data = [raw_data]
-    
     print(f"⚡ Procesando {len(raw_data)} lugares...", flush=True)
     
     final_results = []
     with ThreadPoolExecutor(max_workers=5) as executor:
         results = list(executor.map(process_single_item, raw_data))
         final_results = [r for r in results if r is not None]
-
     return final_results
 
-# --- RUTAS ---
 @app.route('/analyze', methods=['POST'])
 def analyze_video_route():
     try:
@@ -263,7 +221,10 @@ def handle_history():
                     "photoUrl": str(r.get('photourl') or r.get('photo url') or ""),
                     "mapsLink": str(r.get('mapslink') or r.get('maps link') or ""),
                     "isTouristTrap": str(r.get('istouristtrap')).lower() == 'true',
-                    "priceRange": str(r.get('pricerange') or r.get('price range') or "N/A")
+                    "priceRange": str(r.get('pricerange') or r.get('price range') or "N/A"),
+                    # Leemos las nuevas columnas
+                    "lat": float(r.get('lat') or 0),
+                    "lng": float(r.get('lng') or 0)
                 })
             return jsonify(clean)
         except: return jsonify([])
@@ -283,7 +244,9 @@ def handle_history():
                     item.get('score'), item.get('estimatedLocation'), item.get('summary'), 
                     item.get('fileName'), item.get('photoUrl'), item.get('mapsLink'), 
                     item.get('website') or "", 0, 
-                    item.get('isTouristTrap'), item.get('priceRange') 
+                    item.get('isTouristTrap'), item.get('priceRange'),
+                    # Guardamos lat y lng al final
+                    item.get('lat'), item.get('lng')
                 ])
         if rows: sheet.append_rows(rows)
         return jsonify({"status": "saved"})
