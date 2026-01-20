@@ -1,7 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Search, MapPin, AlertTriangle, Loader2, ChevronRight, Camera, Grid, Map as MapIcon, Layers, MessageCircle, Send } from 'lucide-react';
+import { Search, MapPin, AlertTriangle, Loader2, ChevronRight, Camera, Grid, Map as MapIcon, Layers, MessageCircle, Send, Filter, X } from 'lucide-react';
 import MapComponent from './MapComponent'; 
-// ELIMINADA la línea de ReactMarkdown que causaba el error
 
 interface TravelAnalysis {
   id: string; category: string; placeName: string; estimatedLocation: string;
@@ -24,6 +23,10 @@ function App() {
   const [history, setHistory] = useState<TravelAnalysis[]>([]);
   const [error, setError] = useState('');
   
+  // --- SISTEMA DE FILTROS (Se mantiene porque es muy útil) ---
+  const [searchTerm, setSearchTerm] = useState('');
+  const [selectedCategory, setSelectedCategory] = useState('Todas');
+
   // Estados del Chat
   const [messages, setMessages] = useState<ChatMessage[]>([{role: 'bot', text: '¡Hola! Soy tu Guía de Viajes. Conozco todos los lugares que has guardado. Pregúntame por una ruta, recomendaciones o qué visitar primero. 🗺️'}]);
   const [inputMsg, setInputMsg] = useState('');
@@ -49,6 +52,17 @@ function App() {
     } catch (e) { console.error("Error cargando historial", e); }
   };
 
+  // Lógica de Filtrado para el Mapa y las Tarjetas
+  const filteredHistory = history.filter(item => {
+      const matchesSearch = (item.placeName || '').toLowerCase().includes(searchTerm.toLowerCase()) || 
+                            (item.estimatedLocation || '').toLowerCase().includes(searchTerm.toLowerCase());
+      const matchesCategory = selectedCategory === 'Todas' || item.category === selectedCategory;
+      return matchesSearch && matchesCategory;
+  });
+
+  const uniqueCategories = ['Todas', ...new Set(history.map(item => item.category || 'General'))];
+
+  // --- ANÁLISIS MANUAL (Un solo link a la vez) ---
   const handleAnalyze = async () => {
     if (!url) return;
     setLoading(true); setError('');
@@ -61,7 +75,11 @@ function App() {
       if (data.error) throw new Error(data.error);
       const dataArray = Array.isArray(data) ? data : [data];
       setResults(dataArray);
-      fetch('/api/history', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(dataArray) }).then(() => fetchHistory());
+      
+      // Guardar automáticamente
+      fetch('/api/history', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(dataArray) })
+        .then(() => fetchHistory());
+        
     } catch (err: any) { setError(err.message || 'Error inesperado'); } 
     finally { setLoading(false); }
   };
@@ -72,7 +90,6 @@ function App() {
     setInputMsg('');
     setMessages(prev => [...prev, { role: 'user', text: userText }]);
     setChatLoading(true);
-
     try {
         const res = await fetch('/api/chat', {
             method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -80,11 +97,8 @@ function App() {
         });
         const data = await res.json();
         setMessages(prev => [...prev, { role: 'bot', text: data.reply }]);
-    } catch (e) {
-        setMessages(prev => [...prev, { role: 'bot', text: 'Ups, se me cayó el mapa. Intenta de nuevo.' }]);
-    } finally {
-        setChatLoading(false);
-    }
+    } catch (e) { setMessages(prev => [...prev, { role: 'bot', text: 'Ups, se me cayó el mapa. Intenta de nuevo.' }]); } 
+    finally { setChatLoading(false); }
   };
 
   const getScoreBadge = (score: number) => {
@@ -92,6 +106,33 @@ function App() {
     if (score >= 3.5) return 'bg-blue-400 text-white shadow-blue-200';
     return 'bg-amber-400 text-white shadow-amber-200';
   };
+
+  // Componente de Filtros (Buscador + Categoría)
+  const FilterBar = () => (
+    <div className="bg-white p-3 rounded-2xl shadow-sm border border-slate-200 mb-6 flex flex-col sm:flex-row gap-3 items-center sticky top-20 z-10">
+        <div className="relative flex-grow w-full">
+            <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-slate-400" />
+            <input 
+                type="text" 
+                placeholder="Filtrar tus viajes (ej: Cusco, Sushi...)" 
+                value={searchTerm}
+                onChange={(e) => setSearchTerm(e.target.value)}
+                className="w-full pl-9 pr-4 py-2 rounded-xl bg-slate-50 border-transparent focus:bg-white focus:ring-2 focus:ring-indigo-500 text-sm transition-all"
+            />
+            {searchTerm && <button onClick={() => setSearchTerm('')} className="absolute right-3 top-1/2 transform -translate-y-1/2 text-slate-400 hover:text-slate-600"><X className="h-3 w-3" /></button>}
+        </div>
+        <div className="flex items-center gap-2 w-full sm:w-auto">
+            <Filter className="h-4 w-4 text-slate-400" />
+            <select 
+                value={selectedCategory} 
+                onChange={(e) => setSelectedCategory(e.target.value)}
+                className="w-full sm:w-48 py-2 px-3 rounded-xl bg-slate-50 border-transparent focus:bg-white focus:ring-2 focus:ring-indigo-500 text-sm"
+            >
+                {uniqueCategories.map(cat => <option key={cat} value={cat}>{cat}</option>)}
+            </select>
+        </div>
+    </div>
+  );
 
   const TravelCard = ({ item }: { item: TravelAnalysis }) => {
     const safeSummary = item.summary || "";
@@ -145,7 +186,11 @@ function App() {
           <div className="animate-fade-in">
             <div className="text-center max-w-2xl mx-auto mb-10 mt-8"> <h1 className="text-4xl font-black text-slate-800 tracking-tight mb-3">¿Joya o Trampa?</h1> <p className="text-slate-500">Pega un link de TikTok o Instagram para descubrirlo.</p> </div>
             <div className="max-w-2xl mx-auto mb-12">
-              <div className="bg-white p-2 rounded-2xl shadow-xl shadow-indigo-100/50 flex flex-col sm:flex-row items-center border border-slate-100"> <input type="text" className="w-full pl-6 pr-4 py-3 rounded-xl border-none focus:ring-0 text-slate-700 placeholder:text-slate-300" placeholder="https://www.tiktok.com/..." value={url} onChange={(e) => setUrl(e.target.value)} /> <button onClick={handleAnalyze} disabled={loading || !url} className="w-full sm:w-auto mt-2 sm:mt-0 bg-indigo-600 hover:bg-indigo-700 text-white px-6 py-3 rounded-xl font-bold transition-all flex items-center justify-center gap-2 shadow-lg shadow-indigo-200"> {loading ? <Loader2 className="animate-spin h-5 w-5" /> : 'Analizar'} </button> </div>
+              <div className="bg-white p-2 rounded-2xl shadow-xl shadow-indigo-100/50 flex flex-col sm:flex-row items-center border border-slate-100"> 
+                  {/* --- VUELVE EL INPUT SENCILLO --- */}
+                  <input type="text" className="w-full pl-6 pr-4 py-3 rounded-xl border-none focus:ring-0 text-slate-700 placeholder:text-slate-300" placeholder="https://www.tiktok.com/..." value={url} onChange={(e) => setUrl(e.target.value)} />
+                  <button onClick={handleAnalyze} disabled={loading || !url} className="w-full sm:w-auto mt-2 sm:mt-0 bg-indigo-600 hover:bg-indigo-700 text-white px-6 py-3 rounded-xl font-bold transition-all flex items-center justify-center gap-2 shadow-lg shadow-indigo-200"> {loading ? <Loader2 className="animate-spin h-5 w-5" /> : 'Analizar'} </button> 
+              </div>
               {error && <div className="mt-4 text-center text-red-500 bg-red-50 py-2 px-4 rounded-xl">{error}</div>}
             </div>
             {results.length > 0 && <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">{results.map((item) => <TravelCard key={item.id} item={item} />)}</div>}
@@ -155,14 +200,22 @@ function App() {
 
         {activeTab === 'cards' && (
           <div className="animate-fade-in">
-             <div className="flex items-center justify-between mb-8"> <h2 className="text-2xl font-black text-slate-800">Tu Colección de Viajes</h2> <span className="bg-indigo-100 text-indigo-700 font-bold px-3 py-1 rounded-full text-xs">{history.length} Destinos</span> </div>
-             {history.length > 0 ? ( <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6"> {history.map((item) => <TravelCard key={`hist-${item.id}`} item={item} />)} </div> ) : ( <div className="text-center py-20 text-slate-400"><p>Aún no has guardado ningún viaje.</p></div> )}
+             <div className="flex items-center justify-between mb-8"> <h2 className="text-2xl font-black text-slate-800">Tu Colección de Viajes</h2> <span className="bg-indigo-100 text-indigo-700 font-bold px-3 py-1 rounded-full text-xs">{filteredHistory.length} Destinos</span> </div>
+             {/* --- BARRA DE FILTROS --- */}
+             <FilterBar />
+             {filteredHistory.length > 0 ? ( <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6"> {filteredHistory.map((item) => <TravelCard key={`hist-${item.id}`} item={item} />)} </div> ) : ( <div className="text-center py-20 text-slate-400"><p>No hay viajes que coincidan con tu búsqueda.</p></div> )}
           </div>
         )}
 
         {activeTab === 'map' && (
-          <div className="animate-fade-in h-[calc(100vh-180px)]">
-             <div className="h-full w-full rounded-3xl overflow-hidden shadow-2xl border border-slate-200 bg-slate-100"> <MapComponent items={history} /> </div>
+          <div className="animate-fade-in h-[calc(100vh-180px)] relative">
+             {/* --- FILTROS FLOTANTES EN EL MAPA --- */}
+             <div className="absolute top-4 left-4 right-4 z-[1000] max-w-xl mx-auto">
+                <FilterBar />
+             </div>
+             <div className="h-full w-full rounded-3xl overflow-hidden shadow-2xl border border-slate-200 bg-slate-100"> 
+                <MapComponent items={filteredHistory} /> 
+             </div>
           </div>
         )}
 
@@ -170,46 +223,17 @@ function App() {
           <div className="animate-fade-in max-w-3xl mx-auto h-[calc(100vh-180px)] flex flex-col bg-white rounded-3xl shadow-2xl border border-slate-100 overflow-hidden">
              <div className="bg-indigo-600 p-4 flex items-center gap-3">
                 <div className="h-10 w-10 bg-white/20 rounded-full flex items-center justify-center text-white backdrop-blur-sm">🤖</div>
-                <div>
-                    <h3 className="text-white font-bold">Guía de Viajes IA</h3>
-                    <p className="text-indigo-100 text-xs">Experto en tus {history.length} lugares guardados</p>
-                </div>
+                <div> <h3 className="text-white font-bold">Guía de Viajes IA</h3> <p className="text-indigo-100 text-xs">Experto en tus {history.length} lugares guardados</p> </div>
              </div>
              <div className="flex-grow overflow-y-auto p-6 space-y-4 bg-slate-50">
-                {messages.map((msg, idx) => (
-                    <div key={idx} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
-                        <div className={`max-w-[80%] px-5 py-3 rounded-2xl text-sm leading-relaxed shadow-sm ${msg.role === 'user' ? 'bg-indigo-600 text-white rounded-br-none' : 'bg-white text-slate-700 border border-slate-200 rounded-bl-none'}`}>
-                            <div className="whitespace-pre-wrap">{msg.text}</div>
-                        </div>
-                    </div>
-                ))}
-                {chatLoading && (
-                    <div className="flex justify-start">
-                        <div className="bg-white px-4 py-3 rounded-2xl rounded-bl-none border border-slate-200 shadow-sm flex items-center gap-2">
-                            <Loader2 className="h-4 w-4 animate-spin text-indigo-500" />
-                            <span className="text-xs text-slate-400">Pensando ruta...</span>
-                        </div>
-                    </div>
-                )}
+                {messages.map((msg, idx) => ( <div key={idx} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}> <div className={`max-w-[80%] px-5 py-3 rounded-2xl text-sm leading-relaxed shadow-sm ${msg.role === 'user' ? 'bg-indigo-600 text-white rounded-br-none' : 'bg-white text-slate-700 border border-slate-200 rounded-bl-none'}`}> <div className="whitespace-pre-wrap">{msg.text}</div> </div> </div> ))}
+                {chatLoading && ( <div className="flex justify-start"> <div className="bg-white px-4 py-3 rounded-2xl rounded-bl-none border border-slate-200 shadow-sm flex items-center gap-2"> <Loader2 className="h-4 w-4 animate-spin text-indigo-500" /> <span className="text-xs text-slate-400">Pensando ruta...</span> </div> </div> )}
                 <div ref={chatEndRef} />
              </div>
              <div className="p-4 bg-white border-t border-slate-100">
                 <div className="flex gap-2">
-                    <input 
-                        type="text" 
-                        value={inputMsg}
-                        onChange={(e) => setInputMsg(e.target.value)}
-                        onKeyPress={(e) => e.key === 'Enter' && handleSendChat()}
-                        placeholder="Ej: Planea un viaje de 3 días a Cusco..." 
-                        className="flex-grow px-4 py-3 rounded-xl bg-slate-100 border-transparent focus:bg-white focus:ring-2 focus:ring-indigo-500 transition-all text-sm"
-                    />
-                    <button 
-                        onClick={handleSendChat}
-                        disabled={chatLoading || !inputMsg.trim()}
-                        className="bg-indigo-600 hover:bg-indigo-700 text-white p-3 rounded-xl transition-all disabled:opacity-50 disabled:cursor-not-allowed"
-                    >
-                        <Send className="h-5 w-5" />
-                    </button>
+                    <input type="text" value={inputMsg} onChange={(e) => setInputMsg(e.target.value)} onKeyPress={(e) => e.key === 'Enter' && handleSendChat()} placeholder="Ej: Planea un viaje de 3 días a Cusco..." className="flex-grow px-4 py-3 rounded-xl bg-slate-100 border-transparent focus:bg-white focus:ring-2 focus:ring-indigo-500 transition-all text-sm" />
+                    <button onClick={handleSendChat} disabled={chatLoading || !inputMsg.trim()} className="bg-indigo-600 hover:bg-indigo-700 text-white p-3 rounded-xl transition-all disabled:opacity-50 disabled:cursor-not-allowed"> <Send className="h-5 w-5" /> </button>
                 </div>
              </div>
           </div>
