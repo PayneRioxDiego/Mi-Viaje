@@ -2,13 +2,14 @@
 @tailwind components;
 @tailwind utilities;
 
-/* Estilos extra para tu mapa */
+/* Estilos extra necesarios para el mapa */
 .leaflet-container {
     width: 100%;
     height: 100%;
+    z-index: 0;
 }
 
-/* Animación de entrada suave */
+/* Animaciones */
 @keyframes fadeIn {
     from { opacity: 0; transform: translateY(10px); }
     to { opacity: 1; transform: translateY(0); }
