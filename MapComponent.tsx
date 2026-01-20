@@ -4,7 +4,7 @@ import 'leaflet/dist/leaflet.css';
 import L from 'leaflet';
 import { ExternalLink, MapPin, Globe } from 'lucide-react';
 
-// Icono personalizado con CDN para evitar errores de build
+// Icono personalizado (Igual que antes)
 const customIcon = new L.Icon({
     iconUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.7.1/images/marker-icon.png',
     iconRetinaUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.7.1/images/marker-icon-2x.png',
@@ -25,7 +25,6 @@ function ChangeView({ center }: { center: [number, number] }) {
 
 const MapComponent: React.FC<MapProps> = ({ items }) => {
     
-    // Filtro estricto: Solo coordenadas numéricas válidas
     const validMarkers = items.filter(item => {
         const lat = Number(item.lat);
         const lng = Number(item.lng);
@@ -46,7 +45,13 @@ const MapComponent: React.FC<MapProps> = ({ items }) => {
              )}
 
              <MapContainer center={defaultCenter} zoom={validMarkers.length > 0 ? 4 : 2} scrollWheelZoom={true} style={{ height: '100%', width: '100%' }}>
-                <TileLayer attribution='© OSM' url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" />
+                
+                {/* --- AQUÍ ESTÁ EL CAMBIO DE VELOCIDAD --- */}
+                <TileLayer 
+                    attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OSM</a> &copy; <a href="https://carto.com/attributions">CARTO</a>'
+                    url="https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png"
+                />
+                {/* ---------------------------------------- */}
                 
                 {validMarkers.length > 0 && <ChangeView center={[Number(validMarkers[0].lat), Number(validMarkers[0].lng)]} />}
 
