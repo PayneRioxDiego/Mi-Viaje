@@ -3,74 +3,47 @@ import { MapContainer, TileLayer, Marker, Popup, useMap } from 'react-leaflet';
 import 'leaflet/dist/leaflet.css';
 import L from 'leaflet';
 import { ExternalLink, MapPin, Globe } from 'lucide-react';
-
 import icon from 'leaflet/dist/images/marker-icon.png';
 import iconShadow from 'leaflet/dist/images/marker-shadow.png';
 
 let DefaultIcon = L.icon({
-    iconUrl: icon,
-    shadowUrl: iconShadow,
-    iconSize: [25, 41],
-    iconAnchor: [12, 41]
+    iconUrl: icon, shadowUrl: iconShadow,
+    iconSize: [25, 41], iconAnchor: [12, 41]
 });
 L.Marker.prototype.options.icon = DefaultIcon;
 
-interface MapProps {
-    items: any[];
-}
+interface MapProps { items: any[]; }
 
 function ChangeView({ center }: { center: [number, number] }) {
     const map = useMap();
-    map.setView(center, 4);
+    map.setView(center, 13); // Zoom más cercano
     return null;
 }
 
 const MapComponent: React.FC<MapProps> = ({ items }) => {
     
-    const extractCoords = (link: string): [number, number] | null => {
-        if (!link) return null;
-        try {
-            const parts = link.split('/0');
-            if (parts.length > 1) {
-                const coords = parts[1].split(',');
-                const lat = parseFloat(coords[0]);
-                const lng = parseFloat(coords[1]);
-                if (!isNaN(lat) && !isNaN(lng)) return [lat, lng];
-            }
-            return null;
-        } catch (e) { return null; }
-    };
+    // FILTRO DE ORO: Solo mostramos items que tengan coordenadas válidas
+    const validMarkers = items.filter(item => {
+        const lat = parseFloat(item.lat);
+        const lng = parseFloat(item.lng);
+        return !isNaN(lat) && !isNaN(lng) && lat !== 0 && lng !== 0;
+    });
 
-    const validMarkers = items
-        .map(item => ({ ...item, coords: extractCoords(item.mapsLink) }))
-        .filter(item => item.coords !== null);
-
+    // Si no hay marcadores válidos, mostramos el mundo entero
     const defaultCenter: [number, number] = validMarkers.length > 0 
-        ? validMarkers[0].coords 
-        : [20, -40]; 
+        ? [validMarkers[0].lat, validMarkers[0].lng]
+        : [20, 0]; 
 
     return (
         <div className="w-full h-full relative z-0 bg-slate-100">
-             {validMarkers.length === 0 && (
-                <div className="absolute top-4 left-1/2 transform -translate-x-1/2 z-[1000] bg-white/90 px-6 py-3 rounded-full shadow-xl text-sm font-bold text-slate-500 flex items-center gap-2 border border-slate-200 backdrop-blur-sm">
-                    <Globe className="h-4 w-4 text-indigo-500" />
-                    <span>Analiza videos para ver el mapa</span>
-                </div>
-             )}
+             <MapContainer center={defaultCenter} zoom={validMarkers.length > 0 ? 4 : 2} scrollWheelZoom={true} style={{ height: '100%', width: '100%' }}>
+                <TileLayer attribution='© OSM' url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" />
+                
+                {/* Centra el mapa en el primer resultado válido */}
+                {validMarkers.length > 0 && <ChangeView center={[validMarkers[0].lat, validMarkers[0].lng]} />}
 
-             <MapContainer 
-                center={defaultCenter} 
-                zoom={validMarkers.length > 0 ? 4 : 2} 
-                scrollWheelZoom={true} 
-                style={{ height: '100%', width: '100%' }}
-            >
-                <TileLayer
-                    attribution='&copy; OSM & CartoDB'
-                    url="https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png"
-                />
-                {validMarkers.length > 0 && <ChangeView center={validMarkers[0].coords} />}
                 {validMarkers.map((item) => (
-                    <Marker key={`marker-${item.id}`} position={item.coords}>
+                    <Marker key={`marker-${item.id}`} position={[item.lat, item.lng]}>
                         <Popup className="custom-popup">
                             <div className="flex flex-col min-w-[160px]">
                                 {item.photoUrl && (
