@@ -4,29 +4,23 @@ import 'leaflet/dist/leaflet.css';
 import L from 'leaflet';
 import { ExternalLink, MapPin, Globe } from 'lucide-react';
 
-// --- CORRECCIÓN CRÍTICA PARA EL BUILD ---
-// Esto arregla el error de "Module not found: Can't resolve marker-icon.png"
-const fixLeafletIcon = () => {
-  try {
-    // @ts-ignore
-    delete L.Icon.Default.prototype._getIconUrl;
-    L.Icon.Default.mergeOptions({
-      iconRetinaUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.7.1/images/marker-icon-2x.png',
-      iconUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.7.1/images/marker-icon.png',
-      shadowUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.7.1/images/marker-shadow.png',
-    });
-  } catch (e) {
-    console.error("Error fijando iconos leaflet", e);
-  }
-};
-fixLeafletIcon();
-// ----------------------------------------
+// --- SOLUCIÓN LIMPIA PARA EL ICONO (SIN MODIFICAR PROTOTIPOS) ---
+// Creamos un icono explícito para evitar errores de compilación
+const customIcon = new L.Icon({
+    iconUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.7.1/images/marker-icon.png',
+    iconRetinaUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.7.1/images/marker-icon-2x.png',
+    shadowUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.7.1/images/marker-shadow.png',
+    iconSize: [25, 41],
+    iconAnchor: [12, 41],
+    popupAnchor: [1, -34],
+    shadowSize: [41, 41]
+});
 
 interface MapProps { items: any[]; }
 
 function ChangeView({ center }: { center: [number, number] }) {
     const map = useMap();
-    map.setView(center, 13);
+    map.setView(center, 4); // Zoom ajustado
     return null;
 }
 
@@ -34,13 +28,16 @@ const MapComponent: React.FC<MapProps> = ({ items }) => {
     
     // Filtro de seguridad: Solo coordenadas numéricas válidas
     const validMarkers = items.filter(item => {
-        const lat = typeof item.lat === 'string' ? parseFloat(item.lat) : item.lat;
-        const lng = typeof item.lng === 'string' ? parseFloat(item.lng) : item.lng;
+        // Aseguramos conversión a número por si viene como texto
+        const lat = Number(item.lat);
+        const lng = Number(item.lng);
+        // Verificamos que sean números válidos y no sean 0 exacto (error común)
         return !isNaN(lat) && !isNaN(lng) && lat !== 0 && lng !== 0;
     });
 
+    // Centro por defecto (o el primer marcador válido)
     const defaultCenter: [number, number] = validMarkers.length > 0 
-        ? [parseFloat(validMarkers[0].lat), parseFloat(validMarkers[0].lng)] 
+        ? [Number(validMarkers[0].lat), Number(validMarkers[0].lng)] 
         : [20, 0]; 
 
     return (
@@ -55,10 +52,15 @@ const MapComponent: React.FC<MapProps> = ({ items }) => {
              <MapContainer center={defaultCenter} zoom={validMarkers.length > 0 ? 4 : 2} scrollWheelZoom={true} style={{ height: '100%', width: '100%' }}>
                 <TileLayer attribution='© OSM' url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" />
                 
-                {validMarkers.length > 0 && <ChangeView center={[parseFloat(validMarkers[0].lat), parseFloat(validMarkers[0].lng)]} />}
+                {validMarkers.length > 0 && <ChangeView center={[Number(validMarkers[0].lat), Number(validMarkers[0].lng)]} />}
 
                 {validMarkers.map((item) => (
-                    <Marker key={`marker-${item.id}`} position={[parseFloat(item.lat), parseFloat(item.lng)]}>
+                    // AQUI USAMOS EL ICONO PERSONALIZADO
+                    <Marker 
+                        key={`marker-${item.id}`} 
+                        position={[Number(item.lat), Number(item.lng)]}
+                        icon={customIcon} 
+                    >
                         <Popup className="custom-popup">
                             <div className="flex flex-col min-w-[160px]">
                                 {item.photoUrl && (
