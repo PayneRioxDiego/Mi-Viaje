@@ -22,7 +22,7 @@ load_dotenv()
 API_KEY = os.getenv("API_KEY")
 UNSPLASH_KEY = os.getenv("UNSPLASH_ACCESS_KEY") 
 
-print("🚀 INICIANDO: OPCIÓN 2 (COLUMNAS LAT/LNG REALES)...", flush=True)
+print("🚀 INICIANDO: LECTURA DIRECTA DE COLUMNAS LAT/LNG...", flush=True)
 
 if not API_KEY: print("❌ FATAL: API_KEY no encontrada.", flush=True)
 else:
@@ -53,7 +53,7 @@ def verify_location_hybrid(place_name, location_hint, ai_lat=None, ai_lng=None):
     final_lng = ai_lng
     final_address = f"{place_name}, {location_hint}"
     
-    # Si la IA falló, intentamos OSM
+    # Si la IA falló, intentamos OSM como respaldo
     if not final_lat or not final_lng or final_lat == 0:
         headers = { 'User-Agent': 'TravelHunterApp/2.0', 'Accept-Language': 'es-ES' }
         try:
@@ -71,7 +71,7 @@ def verify_location_hybrid(place_name, location_hint, ai_lat=None, ai_lng=None):
 
     photo_url = get_unsplash_photo(f"{place_name} {location_hint} travel")
     
-    # LINK PARA EL USUARIO (SOLO CLIC, YA NO LLEVA DATOS OCULTOS)
+    # GENERAMOS LINK LIMPIO (Solo para el click del usuario, no para el mapa)
     if final_lat and final_lng and final_lat != 0:
         maps_link = f"https://www.google.com/maps/search/?api=1&query={final_lat},{final_lng}"
     else:
@@ -91,6 +91,7 @@ def process_single_item(item):
         guessed_name = str(item.get("placeName") or "Desconocido")
         guessed_loc = str(item.get("estimatedLocation") or "")
         
+        # Limpieza robusta de coordenadas
         def clean_coord(val):
             try: return float(str(val).replace(',', '.'))
             except: return 0.0
@@ -116,9 +117,9 @@ def process_single_item(item):
             "isTouristTrap": bool(item.get("isTouristTrap")),
             "fileName": "Video TikTok",
             "photoUrl": geo_data["photoUrl"],
-            "mapsLink": geo_data["mapsLink"], # Link limpio
-            "lat": geo_data["lat"], # Dato crudo
-            "lng": geo_data["lng"], # Dato crudo
+            "mapsLink": geo_data["mapsLink"], 
+            "lat": geo_data["lat"], # Dato crucial 1
+            "lng": geo_data["lng"], # Dato crucial 2
             "confidenceLevel": "Alto", "criticalVerdict": "", "realRating": 0, "website": "", "openNow": ""
         }
     except Exception as e:
@@ -165,13 +166,10 @@ def analyze_with_gemini(video_path):
     except Exception as e:
         print(f"❌ Error IA: {e}", flush=True)
         raw_data = []
-    
     try: genai.delete_file(video_file.name)
     except: pass
-
     if isinstance(raw_data, dict): raw_data = [raw_data]
     print(f"⚡ Procesando {len(raw_data)} lugares...", flush=True)
-    
     final_results = []
     with ThreadPoolExecutor(max_workers=5) as executor:
         results = list(executor.map(process_single_item, raw_data))
@@ -211,20 +209,29 @@ def handle_history():
             clean = []
             for row in raw:
                 r = {k.lower().strip(): v for k, v in row.items()}
+                
+                # --- AQUÍ ESTÁ EL CAMBIO MÁGICO ---
+                # Leemos las columnas 'lat' y 'lng' del Excel
+                # Si viene vacía o texto, ponemos 0 para que no rompa la app
+                try: lat_val = float(str(r.get('lat', 0)).replace(',', '.'))
+                except: lat_val = 0.0
+                
+                try: lng_val = float(str(r.get('lng', 0)).replace(',', '.'))
+                except: lng_val = 0.0
+
                 clean.append({
                     "id": str(r.get('id') or uuid.uuid4()),
-                    "placeName": str(r.get('placename') or r.get('place name') or "Lugar"),
+                    "placeName": str(r.get('placename') or "Lugar"),
                     "estimatedLocation": str(r.get('estimatedlocation') or ""),
                     "category": str(r.get('category') or "General"),
                     "score": r.get('score') or 0,
                     "summary": str(r.get('summary') or ""),
-                    "photoUrl": str(r.get('photourl') or r.get('photo url') or ""),
-                    "mapsLink": str(r.get('mapslink') or r.get('maps link') or ""),
+                    "photoUrl": str(r.get('photourl') or ""),
+                    "mapsLink": str(r.get('mapslink') or ""),
                     "isTouristTrap": str(r.get('istouristtrap')).lower() == 'true',
-                    "priceRange": str(r.get('pricerange') or r.get('price range') or "N/A"),
-                    # Leemos las nuevas columnas
-                    "lat": float(r.get('lat') or 0),
-                    "lng": float(r.get('lng') or 0)
+                    "priceRange": str(r.get('pricerange') or "N/A"),
+                    "lat": lat_val,  # Enviamos el dato puro
+                    "lng": lng_val   # Enviamos el dato puro
                 })
             return jsonify(clean)
         except: return jsonify([])
@@ -245,8 +252,7 @@ def handle_history():
                     item.get('fileName'), item.get('photoUrl'), item.get('mapsLink'), 
                     item.get('website') or "", 0, 
                     item.get('isTouristTrap'), item.get('priceRange'),
-                    # Guardamos lat y lng al final
-                    item.get('lat'), item.get('lng')
+                    item.get('lat'), item.get('lng') # Guardamos las columnas nuevas
                 ])
         if rows: sheet.append_rows(rows)
         return jsonify({"status": "saved"})
