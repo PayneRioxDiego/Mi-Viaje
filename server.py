@@ -22,7 +22,7 @@ load_dotenv()
 API_KEY = os.getenv("API_KEY")
 UNSPLASH_KEY = os.getenv("UNSPLASH_ACCESS_KEY") 
 
-print("🚀 INICIANDO: GEMINI 2.5 + MAPA ARREGLADO (/0) + ESPAÑOL...", flush=True)
+print("🚀 INICIANDO: PRECIOS REALES + MAPA ARREGLADO...", flush=True)
 
 if not API_KEY: print("❌ FATAL: API_KEY no encontrada.", flush=True)
 else:
@@ -40,7 +40,6 @@ def get_best_model():
 def get_unsplash_photo(query):
     if not UNSPLASH_KEY: return ""
     try:
-        # Traducimos query básica para tener mejores resultados en Unsplash
         safe_query = urllib.parse.quote(query)
         url = f"https://api.unsplash.com/search/photos?page=1&query={safe_query}&per_page=1&orientation=landscape&client_id={UNSPLASH_KEY}"
         res = requests.get(url, timeout=2) 
@@ -58,7 +57,7 @@ def verify_location_hybrid(place_name, location_hint, ai_lat=None, ai_lng=None):
     final_lng = ai_lng
     final_address = f"{place_name}, {location_hint}"
     
-    # Intentamos OSM si la IA falló (0.0)
+    # Si la IA falló (0.0), intentamos OSM
     if not final_lat or not final_lng or final_lat == 0:
         headers = { 'User-Agent': 'TravelHunterApp/2.0', 'Accept-Language': 'es-ES' }
         try:
@@ -77,11 +76,10 @@ def verify_location_hybrid(place_name, location_hint, ai_lat=None, ai_lng=None):
     # Foto
     photo_url = get_unsplash_photo(f"{place_name} {location_hint} travel")
     
-    # --- CORRECCIÓN MAPA CRÍTICA ---
-    # Tu frontend busca ".split('/0')". El link DEBE tener "/0" antes de las coordenadas.
+    # --- LINK HÍBRIDO (CLIC + PIN) ---
     if final_lat and final_lng and final_lat != 0:
-        # Aquí está la magia: "/0" pegado a las coordenadas
-        maps_link = f"https://www.google.com/maps/place/...{final_lat},{final_lng}"
+        # El #/0 es el secreto para tu frontend. Lo anterior es para Google Maps normal.
+        maps_link = f"http://googleusercontent.com/maps.google.com/maps?q={final_lat},{final_lng}#/0{final_lat},{final_lng}"
     else:
         safe = urllib.parse.quote(f"{place_name} {location_hint}")
         maps_link = f"http://googleusercontent.com/maps.google.com/search?q={safe}"
@@ -111,16 +109,18 @@ def process_single_item(item):
         
         geo_data = verify_location_hybrid(guessed_name, guessed_loc, ai_lat, ai_lng)
         
-        # TRADUCCIÓN FORZADA DE CATEGORÍAS (Por si la IA falla)
+        # CATEGORÍAS EN ESPAÑOL
         cat_map = {
-            "Wildlife/Nature Attraction": "Naturaleza y Vida Silvestre",
-            "Landmark/Romantic Spot": "Lugar Romántico/Emblemático",
-            "Museum/Historical Site": "Museo/Sitio Histórico",
-            "Natural Attraction": "Atracción Natural",
-            "Art/Cultural Attraction": "Arte y Cultura"
+            "Wildlife/Nature Attraction": "Naturaleza",
+            "Nature": "Naturaleza",
+            "Landmark": "Monumento",
+            "Historical Site": "Historia",
+            "Food": "Gastronomía",
+            "Adventure": "Aventura",
+            "Viewpoint": "Mirador"
         }
         raw_cat = str(item.get("category") or "Otro")
-        final_cat = cat_map.get(raw_cat, raw_cat) # Si está en la lista traduce, si no, deja el original
+        final_cat = cat_map.get(raw_cat, raw_cat) 
 
         return {
             "id": str(uuid.uuid4()),
@@ -128,7 +128,7 @@ def process_single_item(item):
             "category": final_cat,
             "placeName": geo_data["officialName"],
             "estimatedLocation": geo_data["address"],
-            "priceRange": str(item.get("priceRange") or "N/A"),
+            "priceRange": str(item.get("priceRange") or "N/A"), # Ahora vendrá con precios reales
             "summary": str(item.get("summary") or ""),
             "score": item.get("score") or 0,
             "isTouristTrap": bool(item.get("isTouristTrap")),
@@ -164,27 +164,33 @@ def analyze_with_gemini(video_path):
         
     model = genai.GenerativeModel(model_name="gemini-2.5-flash")
 
-    # --- PROMPT REFORZADO ---
+    # --- PROMPT MEJORADO PARA PRECIOS ---
     prompt = """
-    Analiza este video de viajes. Identifica los lugares.
+    Analiza este video de viajes.
     
-    REGLAS ESTRICTAS DE IDIOMA (OBLIGATORIO ESPAÑOL):
-    1. "category": USA SOLO ESTOS TÉRMINOS: "Naturaleza", "Historia", "Comida", "Aventura", "Cultura", "Mirador".
-    2. "priceRange": USA SOLO: "Gratis", "Económico", "Moderado", "Caro".
-    3. "summary": Descripción en Español.
+    OBJETIVO: Extraer datos estructurados en JSON.
     
-    REGLA DE MAPA: Devuelve coordenadas GPS (lat, lng) decimales exactas.
+    REGLAS DE IDIOMA (ESPAÑOL):
+    - "category": USA SOLO: "Naturaleza", "Historia", "Comida", "Aventura", "Cultura", "Mirador".
+    - "summary": Escribe un resumen atractivo en ESPAÑOL.
+    
+    REGLA DE PRECIOS (IMPORTANTE):
+    - "priceRange": Extrae el PRECIO EXACTO si se menciona (ej: "$5 USD", "20€", "Gratis"). 
+       Si no se menciona, estima un rango realista en USD. NO uses adjetivos como "Barato".
+    
+    REGLA DE MAPA:
+    - Estima latitud (lat) y longitud (lng) numéricas exactas para CADA lugar.
     
     OUTPUT JSON:
     [
       {
         "category": "Historia", 
-        "placeName": "...", 
-        "estimatedLocation": "...", 
-        "lat": -13.163, 
-        "lng": -72.545, 
-        "priceRange": "Caro", 
-        "summary": "...", 
+        "placeName": "Torre Eiffel", 
+        "estimatedLocation": "París, Francia", 
+        "lat": 48.858, 
+        "lng": 2.294, 
+        "priceRange": "Aprox $30 USD", 
+        "summary": "Famosa torre con vistas increíbles.", 
         "score": 4.5, 
         "isTouristTrap": false
       }
@@ -272,13 +278,11 @@ def handle_history():
         for item in new_items:
             key = str(item.get('placeName', '')).strip().lower()
             if key not in name_map:
-                # Escribimos TODAS las columnas, incluyendo las nuevas al final
                 rows.append([
                     item.get('id'), item.get('timestamp'), item.get('placeName'), item.get('category'), 
                     item.get('score'), item.get('estimatedLocation'), item.get('summary'), 
                     item.get('fileName'), item.get('photoUrl'), item.get('mapsLink'), 
                     item.get('website') or "", 0, 
-                    # Columnas M y N (Nuevas)
                     item.get('isTouristTrap'), item.get('priceRange') 
                 ])
         if rows: sheet.append_rows(rows)
