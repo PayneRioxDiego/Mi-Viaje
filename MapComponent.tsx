@@ -5,22 +5,25 @@ import L from 'leaflet';
 import { ExternalLink, MapPin, Globe } from 'lucide-react';
 
 // --- CORRECCIÓN CRÍTICA PARA EL BUILD ---
-// Forzamos a Leaflet a usar imágenes desde un servidor CDN estable.
-// Esto evita que el Build falle por no encontrar los archivos .png locales.
+// Esto arregla el error de "Module not found: Can't resolve marker-icon.png"
 const fixLeafletIcon = () => {
-  delete (L.Icon.Default.prototype as any)._getIconUrl;
-  L.Icon.Default.mergeOptions({
-    iconRetinaUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.7.1/images/marker-icon-2x.png',
-    iconUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.7.1/images/marker-icon.png',
-    shadowUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.7.1/images/marker-shadow.png',
-  });
+  try {
+    // @ts-ignore
+    delete L.Icon.Default.prototype._getIconUrl;
+    L.Icon.Default.mergeOptions({
+      iconRetinaUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.7.1/images/marker-icon-2x.png',
+      iconUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.7.1/images/marker-icon.png',
+      shadowUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.7.1/images/marker-shadow.png',
+    });
+  } catch (e) {
+    console.error("Error fijando iconos leaflet", e);
+  }
 };
 fixLeafletIcon();
 // ----------------------------------------
 
 interface MapProps { items: any[]; }
 
-// Componente para mover la cámara al cambiar de destino
 function ChangeView({ center }: { center: [number, number] }) {
     const map = useMap();
     map.setView(center, 13);
@@ -29,27 +32,23 @@ function ChangeView({ center }: { center: [number, number] }) {
 
 const MapComponent: React.FC<MapProps> = ({ items }) => {
     
-    // Filtramos solo los marcadores válidos
+    // Filtro de seguridad: Solo coordenadas numéricas válidas
     const validMarkers = items.filter(item => {
-        // Aseguramos que sean números, incluso si vienen como texto
         const lat = typeof item.lat === 'string' ? parseFloat(item.lat) : item.lat;
         const lng = typeof item.lng === 'string' ? parseFloat(item.lng) : item.lng;
-        
         return !isNaN(lat) && !isNaN(lng) && lat !== 0 && lng !== 0;
     });
 
-    // Definimos el centro del mapa
     const defaultCenter: [number, number] = validMarkers.length > 0 
-        ? [parseFloat(validMarkers[0].lat), parseFloat(validMarkers[0].lng)]
+        ? [parseFloat(validMarkers[0].lat), parseFloat(validMarkers[0].lng)] 
         : [20, 0]; 
 
     return (
         <div className="w-full h-full relative z-0 bg-slate-100">
-             {/* Mensaje si no hay pines */}
              {validMarkers.length === 0 && (
                 <div className="absolute top-4 left-1/2 transform -translate-x-1/2 z-[1000] bg-white/90 px-6 py-3 rounded-full shadow-xl text-sm font-bold text-slate-500 flex items-center gap-2 border border-slate-200 backdrop-blur-sm">
                     <Globe className="h-4 w-4 text-indigo-500" />
-                    <span>Sin ubicaciones GPS válidas para mostrar</span>
+                    <span>Sin ubicaciones GPS válidas</span>
                 </div>
              )}
 
