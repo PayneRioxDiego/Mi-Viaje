@@ -4,8 +4,7 @@ import 'leaflet/dist/leaflet.css';
 import L from 'leaflet';
 import { ExternalLink, MapPin, Globe } from 'lucide-react';
 
-// --- SOLUCIÓN LIMPIA PARA EL ICONO (SIN MODIFICAR PROTOTIPOS) ---
-// Creamos un icono explícito para evitar errores de compilación
+// Icono personalizado con CDN para evitar errores de build
 const customIcon = new L.Icon({
     iconUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.7.1/images/marker-icon.png',
     iconRetinaUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.7.1/images/marker-icon-2x.png',
@@ -20,22 +19,19 @@ interface MapProps { items: any[]; }
 
 function ChangeView({ center }: { center: [number, number] }) {
     const map = useMap();
-    map.setView(center, 4); // Zoom ajustado
+    map.setView(center, 4);
     return null;
 }
 
 const MapComponent: React.FC<MapProps> = ({ items }) => {
     
-    // Filtro de seguridad: Solo coordenadas numéricas válidas
+    // Filtro estricto: Solo coordenadas numéricas válidas
     const validMarkers = items.filter(item => {
-        // Aseguramos conversión a número por si viene como texto
         const lat = Number(item.lat);
         const lng = Number(item.lng);
-        // Verificamos que sean números válidos y no sean 0 exacto (error común)
         return !isNaN(lat) && !isNaN(lng) && lat !== 0 && lng !== 0;
     });
 
-    // Centro por defecto (o el primer marcador válido)
     const defaultCenter: [number, number] = validMarkers.length > 0 
         ? [Number(validMarkers[0].lat), Number(validMarkers[0].lng)] 
         : [20, 0]; 
@@ -55,12 +51,7 @@ const MapComponent: React.FC<MapProps> = ({ items }) => {
                 {validMarkers.length > 0 && <ChangeView center={[Number(validMarkers[0].lat), Number(validMarkers[0].lng)]} />}
 
                 {validMarkers.map((item) => (
-                    // AQUI USAMOS EL ICONO PERSONALIZADO
-                    <Marker 
-                        key={`marker-${item.id}`} 
-                        position={[Number(item.lat), Number(item.lng)]}
-                        icon={customIcon} 
-                    >
+                    <Marker key={`marker-${item.id}`} position={[Number(item.lat), Number(item.lng)]} icon={customIcon}>
                         <Popup className="custom-popup">
                             <div className="flex flex-col min-w-[160px]">
                                 {item.photoUrl && (
