@@ -3,7 +3,7 @@ export default {
   content: [
     "./index.html",
     "./src/**/*.{js,ts,jsx,tsx}",
-    "./*.{js,ts,jsx,tsx}"  // <--- ¡ESTA ES LA LÍNEA CLAVE! (Busca en la raíz)
+    "./*.{js,ts,jsx,tsx}"  // <--- ¡ESTA LÍNEA ES LA QUE TE FALTA!
   ],
   theme: {
     extend: {},
