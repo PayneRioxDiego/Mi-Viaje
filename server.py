@@ -17,12 +17,11 @@ from oauth2client.service_account import ServiceAccountCredentials
 import urllib.parse
 from concurrent.futures import ThreadPoolExecutor
 
-# --- CONFIGURACIÓN ---
 load_dotenv()
 API_KEY = os.getenv("API_KEY")
 UNSPLASH_KEY = os.getenv("UNSPLASH_ACCESS_KEY") 
 
-print("🚀 INICIANDO: LECTURA DIRECTA DE COLUMNAS LAT/LNG...", flush=True)
+print("🚀 INICIANDO: SISTEMA FINAL (LAT/LNG DIRECTO)...", flush=True)
 
 if not API_KEY: print("❌ FATAL: API_KEY no encontrada.", flush=True)
 else:
@@ -32,8 +31,7 @@ else:
 app = Flask(__name__, static_folder='dist', static_url_path='')
 CORS(app)
 
-def get_best_model():
-    return "gemini-2.5-flash"
+def get_best_model(): return "gemini-2.5-flash"
 
 def get_unsplash_photo(query):
     if not UNSPLASH_KEY: return ""
@@ -53,7 +51,7 @@ def verify_location_hybrid(place_name, location_hint, ai_lat=None, ai_lng=None):
     final_lng = ai_lng
     final_address = f"{place_name}, {location_hint}"
     
-    # Si la IA falló, intentamos OSM como respaldo
+    # Respaldo con OSM si la IA falla
     if not final_lat or not final_lng or final_lat == 0:
         headers = { 'User-Agent': 'TravelHunterApp/2.0', 'Accept-Language': 'es-ES' }
         try:
@@ -71,7 +69,7 @@ def verify_location_hybrid(place_name, location_hint, ai_lat=None, ai_lng=None):
 
     photo_url = get_unsplash_photo(f"{place_name} {location_hint} travel")
     
-    # GENERAMOS LINK LIMPIO (Solo para el click del usuario, no para el mapa)
+    # Link limpio para el usuario (Clic)
     if final_lat and final_lng and final_lat != 0:
         maps_link = f"https://www.google.com/maps/search/?api=1&query={final_lat},{final_lng}"
     else:
@@ -79,11 +77,9 @@ def verify_location_hybrid(place_name, location_hint, ai_lat=None, ai_lng=None):
         maps_link = f"https://www.google.com/maps/search/?api=1&query={safe}"
 
     return {
-        "officialName": place_name,
-        "address": final_address,
+        "officialName": place_name, "address": final_address,
         "lat": final_lat, "lng": final_lng,
-        "photoUrl": photo_url,
-        "mapsLink": maps_link
+        "photoUrl": photo_url, "mapsLink": maps_link
     }
 
 def process_single_item(item):
@@ -91,7 +87,6 @@ def process_single_item(item):
         guessed_name = str(item.get("placeName") or "Desconocido")
         guessed_loc = str(item.get("estimatedLocation") or "")
         
-        # Limpieza robusta de coordenadas
         def clean_coord(val):
             try: return float(str(val).replace(',', '.'))
             except: return 0.0
@@ -106,25 +101,16 @@ def process_single_item(item):
         final_cat = cat_map.get(raw_cat, raw_cat) 
 
         return {
-            "id": str(uuid.uuid4()),
-            "timestamp": int(time.time() * 1000),
-            "category": final_cat,
-            "placeName": geo_data["officialName"],
-            "estimatedLocation": geo_data["address"],
-            "priceRange": str(item.get("priceRange") or "N/A"),
-            "summary": str(item.get("summary") or ""),
-            "score": item.get("score") or 0,
-            "isTouristTrap": bool(item.get("isTouristTrap")),
-            "fileName": "Video TikTok",
-            "photoUrl": geo_data["photoUrl"],
-            "mapsLink": geo_data["mapsLink"], 
-            "lat": geo_data["lat"], # Dato crucial 1
-            "lng": geo_data["lng"], # Dato crucial 2
+            "id": str(uuid.uuid4()), "timestamp": int(time.time() * 1000),
+            "category": final_cat, "placeName": geo_data["officialName"],
+            "estimatedLocation": geo_data["address"], "priceRange": str(item.get("priceRange") or "N/A"),
+            "summary": str(item.get("summary") or ""), "score": item.get("score") or 0,
+            "isTouristTrap": bool(item.get("isTouristTrap")), "fileName": "Video TikTok",
+            "photoUrl": geo_data["photoUrl"], "mapsLink": geo_data["mapsLink"], 
+            "lat": geo_data["lat"], "lng": geo_data["lng"], 
             "confidenceLevel": "Alto", "criticalVerdict": "", "realRating": 0, "website": "", "openNow": ""
         }
-    except Exception as e:
-        print(f"⚠️ Error item: {e}")
-        return None
+    except: return None
 
 def download_video(url):
     print(f"⬇️ Descargando: {url}", flush=True)
@@ -148,10 +134,9 @@ def analyze_with_gemini(video_path):
     model = genai.GenerativeModel(model_name="gemini-2.5-flash")
     prompt = """
     Analiza este video de viajes.
-    OBJETIVO: Extraer datos JSON.
-    IDIOMA: Español.
-    MAPA: Latitud (lat) y Longitud (lng) numéricas.
-    PRECIO: Valor real (ej: "$5 USD") si existe.
+    OBJETIVO: Extraer datos JSON en ESPAÑOL.
+    MAPA: Latitud (lat) y Longitud (lng) numéricas exactas.
+    PRECIO: Valor real (ej: "$5 USD", "Gratis") si existe.
     
     OUTPUT JSON:
     [{
@@ -163,13 +148,12 @@ def analyze_with_gemini(video_path):
     try:
         response = model.generate_content([video_file, prompt], generation_config={"response_mime_type": "application/json"})
         raw_data = json.loads(response.text.replace("```json", "").replace("```", "").strip())
-    except Exception as e:
-        print(f"❌ Error IA: {e}", flush=True)
-        raw_data = []
+    except: raw_data = []
+    
     try: genai.delete_file(video_file.name)
     except: pass
     if isinstance(raw_data, dict): raw_data = [raw_data]
-    print(f"⚡ Procesando {len(raw_data)} lugares...", flush=True)
+    
     final_results = []
     with ThreadPoolExecutor(max_workers=5) as executor:
         results = list(executor.map(process_single_item, raw_data))
@@ -185,9 +169,7 @@ def analyze_video_route():
         if not video_path: return jsonify({"error": "Error descarga"}), 500
         results = analyze_with_gemini(video_path)
         return jsonify(results) 
-    except Exception as e:
-        traceback.print_exc()
-        return jsonify({"error": str(e)}), 500
+    except Exception as e: return jsonify({"error": str(e)}), 500
     finally: gc.collect()
 
 def get_db_connection():
@@ -209,13 +191,9 @@ def handle_history():
             clean = []
             for row in raw:
                 r = {k.lower().strip(): v for k, v in row.items()}
-                
-                # --- AQUÍ ESTÁ EL CAMBIO MÁGICO ---
-                # Leemos las columnas 'lat' y 'lng' del Excel
-                # Si viene vacía o texto, ponemos 0 para que no rompa la app
+                # Lectura segura de coordenadas (maneja vacíos, comas y puntos)
                 try: lat_val = float(str(r.get('lat', 0)).replace(',', '.'))
                 except: lat_val = 0.0
-                
                 try: lng_val = float(str(r.get('lng', 0)).replace(',', '.'))
                 except: lng_val = 0.0
 
@@ -230,8 +208,7 @@ def handle_history():
                     "mapsLink": str(r.get('mapslink') or ""),
                     "isTouristTrap": str(r.get('istouristtrap')).lower() == 'true',
                     "priceRange": str(r.get('pricerange') or "N/A"),
-                    "lat": lat_val,  # Enviamos el dato puro
-                    "lng": lng_val   # Enviamos el dato puro
+                    "lat": lat_val, "lng": lng_val
                 })
             return jsonify(clean)
         except: return jsonify([])
@@ -252,7 +229,7 @@ def handle_history():
                     item.get('fileName'), item.get('photoUrl'), item.get('mapsLink'), 
                     item.get('website') or "", 0, 
                     item.get('isTouristTrap'), item.get('priceRange'),
-                    item.get('lat'), item.get('lng') # Guardamos las columnas nuevas
+                    item.get('lat'), item.get('lng') # Guarda en columnas O y P
                 ])
         if rows: sheet.append_rows(rows)
         return jsonify({"status": "saved"})
