@@ -15,13 +15,14 @@ from dotenv import load_dotenv
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
 import urllib.parse
+from concurrent.futures import ThreadPoolExecutor # <--- EL SECRETO DE LA VELOCIDAD
 
 # --- CONFIGURACIÓN ---
 load_dotenv()
 API_KEY = os.getenv("API_KEY")
 UNSPLASH_KEY = os.getenv("UNSPLASH_ACCESS_KEY") 
 
-print("🚀 INICIANDO MODO: RUTAS REALES (GEMINI GPS)...", flush=True)
+print("🚀 INICIANDO MODO TURBO (PARALELO)...", flush=True)
 
 if not API_KEY: 
     print("❌ FATAL: API_KEY no encontrada.", flush=True)
@@ -36,7 +37,6 @@ CORS(app)
 
 # --- 1. MODELO ---
 def get_best_model():
-    # ... (Misma lógica de selección de modelo que ya funcionaba bien)
     wishlist = ["gemini-2.5-flash", "gemini-2.5-flash-latest", "gemini-1.5-flash"]
     try:
         available = [m.name for m in genai.list_models()]
@@ -46,13 +46,14 @@ def get_best_model():
         return "gemini-1.5-flash"
     except: return "gemini-1.5-flash"
 
-# --- 2. FOTOS (UNSPLASH) ---
+# --- 2. FOTOS (UNSPLASH) - CON TIMEOUT CORTO ---
 def get_unsplash_photo(query):
     if not UNSPLASH_KEY: return ""
     try:
         safe_query = urllib.parse.quote(query)
+        # Timeout agresivo de 2s para no colgar el servidor
         url = f"https://api.unsplash.com/search/photos?page=1&query={safe_query}&per_page=1&orientation=landscape&client_id={UNSPLASH_KEY}"
-        res = requests.get(url, timeout=3)
+        res = requests.get(url, timeout=2) 
         if res.status_code == 200:
             data = res.json()
             if "results" in data and len(data["results"]) > 0:
@@ -60,68 +61,52 @@ def get_unsplash_photo(query):
     except: pass
     return ""
 
-# --- 3. MAPAS HÍBRIDOS (OSM + INTELIGENCIA ARTIFICIAL) ---
+# --- 3. MAPAS HÍBRIDOS (OSM + IA) - OPTIMIZADO ---
 def verify_location_hybrid(place_name, location_hint, ai_lat=None, ai_lng=None):
-    headers = { 'User-Agent': 'TravelHunterApp/2.0' }
+    headers = { 'User-Agent': 'TravelHunterApp/Turbo' }
     
-    # A. Limpieza de nombre
     clean_name = place_name
     for word in ["tour", "full day", "trekking", "caminata", "visita", "excursion", "viaje a"]:
         clean_name = clean_name.lower().replace(word, "").strip()
     
     best_result = None
 
-    # B. INTENTO 1: OpenStreetMap (Precision Quirúrgica)
-    # Solo buscamos si el nombre es específico.
-    print(f"🌍 Buscando '{clean_name}' en OSM...", flush=True)
+    # Intentamos OSM solo si vale la pena (timeout corto)
     queries = [f"{clean_name} {location_hint}", clean_name]
     
     for query in queries:
         try:
             if len(query) < 3: continue
+            # Timeout de 3s máximo por intento
             response = requests.get("https://nominatim.openstreetmap.org/search", 
                                   params={'q': query, 'format': 'json', 'limit': 1}, 
-                                  headers=headers, timeout=4)
+                                  headers=headers, timeout=3)
             data = response.json()
             if data:
                 best_result = data[0]
-                print(f"   ✅ OSM encontró: {query}", flush=True)
                 break
         except: pass
 
-    # C. DEFINICIÓN DE COORDENADAS FINAL
     final_lat = ""
     final_lng = ""
-    source = "none"
-
+    
     if best_result:
-        # 1. Prioridad: OSM (Es un mapa real)
         final_lat = best_result.get('lat')
         final_lng = best_result.get('lon')
         final_address = best_result.get('display_name')
-        source = "osm"
     elif ai_lat and ai_lng and ai_lat != 0:
-        # 2. Prioridad: Gemini GPS (La IA sabe dónde es)
-        # Si OSM falló, usamos lo que la IA estimó. 
-        # Es mucho mejor usar la coordenada de la IA (que pondrá el pin en la montaña)
-        # que usar el centro de la ciudad.
-        print(f"   🤖 Usando coordenadas de IA para '{place_name}' ({ai_lat}, {ai_lng})", flush=True)
         final_lat = ai_lat
         final_lng = ai_lng
-        final_address = f"{place_name}, {location_hint} (Ubicación Est. por IA)"
-        source = "ai"
+        final_address = f"{place_name}, {location_hint}"
     else:
-        # 3. Fallo total (Sin mapa)
         final_address = location_hint
 
-    # D. CONSTRUCCIÓN DE RESPUESTA
+    # Foto en paralelo (dentro del hilo)
     photo_url = get_unsplash_photo(f"{clean_name} {location_hint} travel")
     
-    # Generamos el link
     if final_lat and final_lng:
         maps_link = f"https://www.google.com/maps/search/?api=1&query={final_lat},{final_lng}"
     else:
-        # Si todo falló, link de búsqueda texto
         search_safe = urllib.parse.quote(f"{place_name} {location_hint}")
         maps_link = f"https://www.google.com/maps/search/?api=1&query={search_safe}"
 
@@ -130,13 +115,45 @@ def verify_location_hybrid(place_name, location_hint, ai_lat=None, ai_lng=None):
         "address": final_address,
         "lat": final_lat, "lng": final_lng,
         "photoUrl": photo_url,
-        "mapsLink": maps_link,
-        "source": source
+        "mapsLink": maps_link
     }
 
-# --- 4. VIDEO & ANÁLISIS ---
+# --- 4. PROCESAMIENTO PARALELO (NUEVO) ---
+def process_single_item(item):
+    """Procesa UN solo item (Mapa + Foto). Esta función correrá en paralelo."""
+    try:
+        guessed_name = str(item.get("placeName") or "Desconocido")
+        guessed_loc = str(item.get("estimatedLocation") or "")
+        
+        # GPS de la IA
+        ai_gps = item.get("gps") or {}
+        ai_lat = ai_gps.get("lat", 0)
+        ai_lng = ai_gps.get("lng", 0)
+        
+        # Verificación pesada (OSM + Unsplash)
+        geo_data = verify_location_hybrid(guessed_name, guessed_loc, ai_lat, ai_lng)
+
+        return {
+            "id": str(uuid.uuid4()),
+            "timestamp": int(time.time() * 1000),
+            "category": str(item.get("category") or "Otro"),
+            "placeName": geo_data["officialName"],
+            "estimatedLocation": geo_data["address"],
+            "priceRange": str(item.get("priceRange") or "??"),
+            "summary": str(item.get("summary") or ""),
+            "score": item.get("score") or 0,
+            "isTouristTrap": bool(item.get("isTouristTrap")),
+            "fileName": "Video TikTok",
+            "photoUrl": geo_data["photoUrl"],
+            "mapsLink": geo_data["mapsLink"],
+            "confidenceLevel": "Alto", "criticalVerdict": "", "realRating": 0, "website": "", "openNow": "", "phone": ""
+        }
+    except Exception as e:
+        print(f"⚠️ Error procesando item individual: {e}")
+        return None
+
+# --- 5. VIDEO & ANÁLISIS ---
 def download_video(url):
-    # (Igual que antes)
     print(f"⬇️ Descargando: {url}", flush=True)
     temp_dir = tempfile.mkdtemp()
     output_template = os.path.join(temp_dir, f'video_{int(time.time())}.%(ext)s')
@@ -150,80 +167,58 @@ def download_video(url):
     except: return None
 
 def analyze_with_gemini(video_path):
-    print(f"📤 Subiendo video...", flush=True)
+    print(f"📤 Subiendo video a Gemini...", flush=True)
     video_file = genai.upload_file(path=video_path)
-    while video_file.state.name == "PROCESSING": time.sleep(1)
     
+    # Espera activa con log
+    dots = 0
+    while video_file.state.name == "PROCESSING":
+        time.sleep(1)
+        dots += 1
+        if dots % 5 == 0: print(f"   ⏳ Procesando en Google... ({dots}s)", flush=True)
+        video_file = genai.get_file(video_file.name)
+        
+    if video_file.state.name == "FAILED": raise Exception("Google rechazó el video")
+
     active_model = get_best_model()
-    print(f"🤖 Analizando con {active_model} (Modo GPS)...", flush=True)
+    print(f"🤖 Analizando con {active_model}...", flush=True)
     model = genai.GenerativeModel(model_name=active_model)
 
-    # --- PROMPT MEJORADO PARA PEDIR COORDENADAS ---
     prompt = """
     Analiza este video de viaje. Identifica TODOS los lugares turísticos.
-    IMPORTANTE: Para cada lugar, estima sus coordenadas GPS (latitud y longitud) con la mayor precisión posible basada en tu conocimiento geográfico.
-    
+    IMPORTANTE: Estima coordenadas GPS (lat, lng) para cada lugar.
     OUTPUT: JSON Array ONLY. NO Markdown.
-    LANGUAGE: SPANISH.
-    
-    Structure:
-    {
-      "category": "Comida/Alojamiento/Actividad",
-      "placeName": "Nombre Exacto",
-      "estimatedLocation": "Ciudad, Pais",
-      "gps": { "lat": number, "lng": number }, 
-      "priceRange": "Gratis/Barato/Moderado/Caro",
-      "summary": "Resumen atractivo",
-      "score": 4.5,
-      "isTouristTrap": boolean
-    }
+    Structure: {"category": "...", "placeName": "...", "estimatedLocation": "...", "gps": {"lat": 0.0, "lng": 0.0}, "priceRange": "...", "summary": "...", "score": 4.5, "isTouristTrap": boolean}
     """
     
     try:
         response = model.generate_content([video_file, prompt], generation_config={"response_mime_type": "application/json"})
-        raw_data = json.loads(response.text.replace("```json", "").replace("```", "").strip())
+        clean = response.text.replace("```json", "").replace("```", "").strip()
+        raw_data = json.loads(clean)
     except Exception as e:
-        print(f"❌ Error IA: {e}")
+        print(f"❌ Error IA: {e}", flush=True)
         raw_data = []
     
     try: genai.delete_file(video_file.name)
     except: pass
 
     if isinstance(raw_data, dict): raw_data = [raw_data]
-    final_results = []
     
-    for item in raw_data:
-        guessed_name = str(item.get("placeName") or "Desconocido")
-        guessed_loc = str(item.get("estimatedLocation") or "")
-        
-        # Extraemos coordenadas de la IA
-        ai_gps = item.get("gps") or {}
-        ai_lat = ai_gps.get("lat", 0)
-        ai_lng = ai_gps.get("lng", 0)
-        
-        # Verificación Híbrida (OSM primero, luego IA)
-        geo_data = verify_location_hybrid(guessed_name, guessed_loc, ai_lat, ai_lng)
+    print(f"⚡ Iniciando procesamiento paralelo de {len(raw_data)} lugares found...", flush=True)
+    
+    # --- AQUÍ OCURRE LA MAGIA PARALELA ---
+    final_results = []
+    # Usamos 5 "trabajadores" simultáneos
+    with ThreadPoolExecutor(max_workers=5) as executor:
+        # Mapeamos la función a los datos
+        results = list(executor.map(process_single_item, raw_data))
+        # Filtramos los nulos (errores)
+        final_results = [r for r in results if r is not None]
 
-        final_results.append({
-            "id": str(uuid.uuid4()),
-            "timestamp": int(time.time() * 1000),
-            "category": str(item.get("category") or "Otro"),
-            "placeName": geo_data["officialName"],
-            "estimatedLocation": geo_data["address"],
-            "priceRange": str(item.get("priceRange") or "??"),
-            "summary": str(item.get("summary") or ""),
-            "score": item.get("score") or 0,
-            "isTouristTrap": bool(item.get("isTouristTrap")),
-            "fileName": "Video TikTok",
-            "photoUrl": geo_data["photoUrl"],
-            "mapsLink": geo_data["mapsLink"],
-            # Campos extra para compatibilidad
-            "confidenceLevel": "Alto", "criticalVerdict": "", "realRating": 0, "website": "", "openNow": "", "phone": ""
-        })
-
+    print(f"✅ Procesamiento terminado. Retornando {len(final_results)} resultados.", flush=True)
     return final_results
 
-# --- RUTAS Y DB (Mismo código de siempre, resumido) ---
+# --- RUTAS Y DB ---
 @app.route('/analyze', methods=['POST'])
 def analyze_video_route():
     try:
@@ -234,11 +229,12 @@ def analyze_video_route():
         if not video_path: return jsonify({"error": "Error descarga"}), 500
         results = analyze_with_gemini(video_path)
         return jsonify(results) 
-    except Exception as e: return jsonify({"error": str(e)}), 500
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({"error": str(e)}), 500
     finally: gc.collect()
 
 def get_db_connection():
-    # (Código de conexión a Sheets igual al anterior)
     creds_json = os.getenv("GOOGLE_CREDENTIALS_JSON")
     sheet_id = os.getenv("GOOGLE_SHEET_ID")
     if not creds_json or not sheet_id: return None
@@ -251,9 +247,6 @@ def get_db_connection():
 
 @app.route('/api/history', methods=['POST', 'GET'])
 def handle_history():
-    # (Mismo código de history con traductor universal que te di antes)
-    # COPIA Y PEGA LA VERSIÓN COMPLETA ANTERIOR AQUÍ O USA LA ABREVIADA SI LA TIENES
-    # Por seguridad, repito la lógica básica:
     sheet = get_db_connection()
     if request.method == 'GET':
         if not sheet: return jsonify([])
@@ -262,8 +255,6 @@ def handle_history():
             clean = []
             for row in raw:
                 r = {k.lower().strip(): v for k, v in row.items()}
-                # ... (Lógica de extracción igual al paso anterior)
-                # IMPORTANTE: Asegúrate de extraer 'mapsLink' correctamente
                 clean.append({
                     "id": str(r.get('id') or uuid.uuid4()),
                     "placeName": str(r.get('placename') or r.get('place name') or "Lugar"),
@@ -279,7 +270,7 @@ def handle_history():
             return jsonify(clean)
         except: return jsonify([])
 
-    try: # POST
+    try: 
         new_items = request.json
         if not isinstance(new_items, list): new_items = [new_items]
         if not sheet: return jsonify({"status": "local"})
