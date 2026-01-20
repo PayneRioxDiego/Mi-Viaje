@@ -5,8 +5,8 @@ import L from 'leaflet';
 import { ExternalLink, MapPin, Globe } from 'lucide-react';
 
 // --- CORRECCIÓN CRÍTICA PARA EL BUILD ---
-// En lugar de importar las imágenes locales (que rompen el build si no hay types),
-// forzamos a Leaflet a usar imágenes desde un servidor CDN estable.
+// Forzamos a Leaflet a usar imágenes desde un servidor CDN estable.
+// Esto evita que el Build falle por no encontrar los archivos .png locales.
 const fixLeafletIcon = () => {
   delete (L.Icon.Default.prototype as any)._getIconUrl;
   L.Icon.Default.mergeOptions({
