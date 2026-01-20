@@ -15,43 +15,33 @@ from dotenv import load_dotenv
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
 import urllib.parse
-from concurrent.futures import ThreadPoolExecutor # <--- EL SECRETO DE LA VELOCIDAD
+from concurrent.futures import ThreadPoolExecutor
 
 # --- CONFIGURACIÓN ---
 load_dotenv()
 API_KEY = os.getenv("API_KEY")
 UNSPLASH_KEY = os.getenv("UNSPLASH_ACCESS_KEY") 
 
-print("🚀 INICIANDO MODO TURBO (PARALELO + ESPAÑOL)...", flush=True)
+print("🚀 INICIANDO: MOTOR GEMINI 2.5 FLASH + GPS IA...", flush=True)
 
-if not API_KEY: 
-    print("❌ FATAL: API_KEY no encontrada.", flush=True)
+if not API_KEY: print("❌ FATAL: API_KEY no encontrada.", flush=True)
 else:
-    try: 
-        genai.configure(api_key=API_KEY)
-    except Exception as e: 
-        print(f"❌ Error Gemini Config: {e}", flush=True)
+    try: genai.configure(api_key=API_KEY)
+    except Exception as e: print(f"❌ Error Gemini Config: {e}", flush=True)
 
 app = Flask(__name__, static_folder='dist', static_url_path='')
 CORS(app)
 
-# --- 1. MODELO ---
+# --- 1. MODELO (ACTUALIZADO A 2.5) ---
 def get_best_model():
-    wishlist = ["gemini-2.5-flash", "gemini-2.5-flash-latest", "gemini-1.5-flash"]
-    try:
-        available = [m.name for m in genai.list_models()]
-        for target in wishlist:
-            for real in available:
-                if target in real: return real
-        return "gemini-1.5-flash"
-    except: return "gemini-1.5-flash"
+    # USAMOS EXPLÍCITAMENTE LA VERSIÓN 2.5 FLASH
+    return "gemini-2.5-flash"
 
-# --- 2. FOTOS (UNSPLASH) - CON TIMEOUT CORTO ---
+# --- 2. FOTOS (UNSPLASH) ---
 def get_unsplash_photo(query):
     if not UNSPLASH_KEY: return ""
     try:
         safe_query = urllib.parse.quote(query)
-        # Timeout agresivo de 2s para no colgar el servidor
         url = f"https://api.unsplash.com/search/photos?page=1&query={safe_query}&per_page=1&orientation=landscape&client_id={UNSPLASH_KEY}"
         res = requests.get(url, timeout=2) 
         if res.status_code == 200:
@@ -61,59 +51,40 @@ def get_unsplash_photo(query):
     except: pass
     return ""
 
-# --- 3. MAPAS HÍBRIDOS (OSM + IA) - OPTIMIZADO EN ESPAÑOL ---
+# --- 3. LÓGICA DE UBICACIÓN (PRIORIDAD IA) ---
 def verify_location_hybrid(place_name, location_hint, ai_lat=None, ai_lng=None):
-    # HEADER CORREGIDO: Forzamos idioma Español para los resultados de mapas
-    headers = { 
-        'User-Agent': 'TravelHunterApp/Turbo',
-        'Accept-Language': 'es-ES,es;q=0.9' 
-    }
     
-    clean_name = place_name
-    for word in ["tour", "full day", "trekking", "caminata", "visita", "excursion", "viaje a"]:
-        clean_name = clean_name.lower().replace(word, "").strip()
+    final_lat = ai_lat
+    final_lng = ai_lng
+    final_address = f"{place_name}, {location_hint}"
     
-    best_result = None
-
-    # Intentamos OSM solo si vale la pena (timeout corto)
-    queries = [f"{clean_name} {location_hint}", clean_name]
-    
-    for query in queries:
+    # Si la IA falló en darnos coordenadas (0 o None), intentamos OSM con cuidado
+    if not final_lat or not final_lng or final_lat == 0:
+        print(f"⚠️ IA sin GPS para '{place_name}'. Intentando OSM...", flush=True)
+        headers = { 'User-Agent': 'TravelHunterApp/2.0', 'Accept-Language': 'es-ES' }
         try:
-            if len(query) < 3: continue
-            # Timeout de 3s máximo por intento
-            response = requests.get("https://nominatim.openstreetmap.org/search", 
-                                  params={'q': query, 'format': 'json', 'limit': 1}, 
-                                  headers=headers, timeout=3)
-            data = response.json()
+            time.sleep(1.0) # Sleep para evitar bloqueo
+            q = f"{place_name} {location_hint}"
+            res = requests.get("https://nominatim.openstreetmap.org/search", 
+                             params={'q': q, 'format': 'json', 'limit': 1}, 
+                             headers=headers, timeout=4)
+            data = res.json()
             if data:
-                best_result = data[0]
-                break
-        except: pass
+                final_lat = float(data[0].get('lat'))
+                final_lng = float(data[0].get('lon'))
+                final_address = data[0].get('display_name')
+        except Exception as e:
+            print(f"   ❌ Falló OSM también: {e}", flush=True)
 
-    final_lat = ""
-    final_lng = ""
+    # Foto
+    photo_url = get_unsplash_photo(f"{place_name} {location_hint} travel")
     
-    if best_result:
-        final_lat = best_result.get('lat')
-        final_lng = best_result.get('lon')
-        final_address = best_result.get('display_name')
-    elif ai_lat and ai_lng and ai_lat != 0:
-        final_lat = ai_lat
-        final_lng = ai_lng
-        final_address = f"{place_name}, {location_hint}"
-    else:
-        final_address = location_hint
-
-    # Foto en paralelo (dentro del hilo)
-    photo_url = get_unsplash_photo(f"{clean_name} {location_hint} travel")
-    
-    # GENERACIÓN DE LINK CORREGIDA: Solo generamos link si hay coordenadas reales
-    if final_lat and final_lng:
+    # CONSTRUCCIÓN DEL LINK
+    if final_lat and final_lng and final_lat != 0:
         maps_link = f"https://www.google.com/maps/search/?api=1&query={final_lat},{final_lng}"
     else:
-        search_safe = urllib.parse.quote(f"{place_name} {location_hint}")
-        maps_link = f"https://www.google.com/maps/search/?api=1&query={search_safe}"
+        safe = urllib.parse.quote(f"{place_name} {location_hint}")
+        maps_link = f"https://www.google.com/maps/search/?api=1&query={safe}"
 
     return {
         "officialName": place_name,
@@ -125,17 +96,16 @@ def verify_location_hybrid(place_name, location_hint, ai_lat=None, ai_lng=None):
 
 # --- 4. PROCESAMIENTO PARALELO ---
 def process_single_item(item):
-    """Procesa UN solo item (Mapa + Foto). Esta función correrá en paralelo."""
     try:
         guessed_name = str(item.get("placeName") or "Desconocido")
         guessed_loc = str(item.get("estimatedLocation") or "")
         
-        # GPS de la IA
-        ai_gps = item.get("gps") or {}
-        ai_lat = ai_gps.get("lat", 0)
-        ai_lng = ai_gps.get("lng", 0)
+        try: ai_lat = float(item.get("lat", 0))
+        except: ai_lat = 0
         
-        # Verificación pesada (OSM + Unsplash)
+        try: ai_lng = float(item.get("lng", 0))
+        except: ai_lng = 0
+        
         geo_data = verify_location_hybrid(guessed_name, guessed_loc, ai_lat, ai_lng)
 
         return {
@@ -151,64 +121,56 @@ def process_single_item(item):
             "fileName": "Video TikTok",
             "photoUrl": geo_data["photoUrl"],
             "mapsLink": geo_data["mapsLink"],
-            "confidenceLevel": "Alto", "criticalVerdict": "", "realRating": 0, "website": "", "openNow": "", "phone": ""
+            "confidenceLevel": "Alto", "criticalVerdict": "", "realRating": 0, "website": "", "openNow": ""
         }
     except Exception as e:
-        print(f"⚠️ Error procesando item individual: {e}")
+        print(f"⚠️ Error item: {e}")
         return None
 
-# --- 5. VIDEO & ANÁLISIS ---
+# --- 5. ANÁLISIS ---
 def download_video(url):
     print(f"⬇️ Descargando: {url}", flush=True)
     temp_dir = tempfile.mkdtemp()
-    output_template = os.path.join(temp_dir, f'video_{int(time.time())}.%(ext)s')
-    ydl_opts = { 'format': 'worst[ext=mp4]', 'outtmpl': output_template, 'quiet': True, 'no_warnings': True, 'nocheckcertificate': True }
+    tmpl = os.path.join(temp_dir, f'video_{int(time.time())}.%(ext)s')
+    opts = { 'format': 'worst[ext=mp4]', 'outtmpl': tmpl, 'quiet': True, 'no_warnings': True, 'nocheckcertificate': True }
     try:
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            ydl.download([url])
+        with yt_dlp.YoutubeDL(opts) as ydl: ydl.download([url])
         files = glob.glob(os.path.join(temp_dir, 'video_*'))
         gc.collect()
         return files[0] if files else None
     except: return None
 
 def analyze_with_gemini(video_path):
-    print(f"📤 Subiendo video a Gemini...", flush=True)
+    print(f"📤 Subiendo...", flush=True)
     video_file = genai.upload_file(path=video_path)
     
-    # Espera activa con log
-    dots = 0
     while video_file.state.name == "PROCESSING":
         time.sleep(1)
-        dots += 1
-        if dots % 5 == 0: print(f"   ⏳ Procesando en Google... ({dots}s)", flush=True)
         video_file = genai.get_file(video_file.name)
         
-    if video_file.state.name == "FAILED": raise Exception("Google rechazó el video")
+    # USAMOS MODELO 2.5 FLASH
+    model = genai.GenerativeModel(model_name="gemini-2.5-flash")
 
-    active_model = get_best_model()
-    print(f"🤖 Analizando con {active_model}...", flush=True)
-    model = genai.GenerativeModel(model_name=active_model)
-
-    # PROMPT CORREGIDO: Estricto con el idioma y las coordenadas
+    # PROMPT
     prompt = """
-    Eres un experto guía de viajes local. Analiza este video.
-    Identifica TODOS los lugares turísticos mostrados.
+    Analiza este video de viaje. Identifica TODOS los lugares turísticos.
     
     REGLAS OBLIGATORIAS:
-    1. IDIOMA: TODA la respuesta (nombres, resumen, categorias) DEBE ser en ESPAÑOL LATINO.
-    2. COORDENADAS: Estima latitud y longitud (gps) para CADA lugar. Si no es exacto, estima la ciudad. NUNCA lo dejes vacio.
+    1. IDIOMA: Español Latino.
+    2. GPS: Estima latitud (lat) y longitud (lng) para CADA lugar.
     
-    OUTPUT: JSON Array ONLY. 
-    Structure:
+    OUTPUT: JSON Array.
+    Estructura PLANA:
     {
-      "category": "Comida/Alojamiento/Actividad/Paisaje",
-      "placeName": "Nombre en Español",
-      "estimatedLocation": "Ciudad, País (en Español)",
-      "gps": { "lat": -0.0000, "lng": -0.0000 }, 
-      "priceRange": "Gratis/Barato/Moderado/Caro",
-      "summary": "Resumen atractivo y útil en español (máx 20 palabras)",
-      "score": 4.5,
-      "isTouristTrap": boolean
+      "category": "...", 
+      "placeName": "Nombre", 
+      "estimatedLocation": "Ciudad", 
+      "lat": -13.1631, 
+      "lng": -72.5450, 
+      "priceRange": "...", 
+      "summary": "...", 
+      "score": 4.5, 
+      "isTouristTrap": false
     }
     """
     
@@ -225,27 +187,21 @@ def analyze_with_gemini(video_path):
 
     if isinstance(raw_data, dict): raw_data = [raw_data]
     
-    print(f"⚡ Iniciando procesamiento paralelo de {len(raw_data)} lugares found...", flush=True)
+    print(f"⚡ Procesando {len(raw_data)} lugares...", flush=True)
     
-    # --- AQUÍ OCURRE LA MAGIA PARALELA ---
     final_results = []
-    # Usamos 5 "trabajadores" simultáneos
     with ThreadPoolExecutor(max_workers=5) as executor:
-        # Mapeamos la función a los datos
         results = list(executor.map(process_single_item, raw_data))
-        # Filtramos los nulos (errores)
         final_results = [r for r in results if r is not None]
 
-    print(f"✅ Procesamiento terminado. Retornando {len(final_results)} resultados.", flush=True)
     return final_results
 
-# --- RUTAS Y DB ---
+# --- RUTAS ---
 @app.route('/analyze', methods=['POST'])
 def analyze_video_route():
     try:
         data = request.json
-        if isinstance(data, list): data = data[0]
-        url = data.get('url')
+        url = data.get('url') if isinstance(data, dict) else data[0].get('url')
         video_path = download_video(url)
         if not video_path: return jsonify({"error": "Error descarga"}), 500
         results = analyze_with_gemini(video_path)
@@ -260,9 +216,7 @@ def get_db_connection():
     sheet_id = os.getenv("GOOGLE_SHEET_ID")
     if not creds_json or not sheet_id: return None
     try:
-        creds_dict = json.loads(creds_json)
-        SCOPES = ['https://www.googleapis.com/auth/spreadsheets', "https://www.googleapis.com/auth/drive"]
-        creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, SCOPES)
+        creds = ServiceAccountCredentials.from_json_keyfile_dict(json.loads(creds_json), ['https://www.googleapis.com/auth/spreadsheets'])
         return gspread.authorize(creds).open_by_key(sheet_id).sheet1
     except: return None
 
@@ -279,7 +233,7 @@ def handle_history():
                 clean.append({
                     "id": str(r.get('id') or uuid.uuid4()),
                     "placeName": str(r.get('placename') or r.get('place name') or "Lugar"),
-                    "estimatedLocation": str(r.get('estimatedlocation') or r.get('estimated location') or ""),
+                    "estimatedLocation": str(r.get('estimatedlocation') or ""),
                     "category": str(r.get('category') or "General"),
                     "score": r.get('score') or 0,
                     "summary": str(r.get('summary') or ""),
@@ -295,25 +249,16 @@ def handle_history():
         new_items = request.json
         if not isinstance(new_items, list): new_items = [new_items]
         if not sheet: return jsonify({"status": "local"})
-        try: existing = sheet.get_all_records()
-        except: existing = []
+        existing = sheet.get_all_records()
         name_map = {str(r.get('placeName', '')).strip().lower(): i+2 for i, r in enumerate(existing)}
         rows = []
         for item in new_items:
-            name = str(item.get('placeName', '')).strip()
-            key = name.lower()
-            photo = item.get('photoUrl') or ""
-            if key in name_map:
-                try:
-                    idx = name_map[key]
-                    sheet.update_cell(idx, 5, item.get('score'))
-                    if photo: sheet.update_cell(idx, 9, photo)
-                except: pass
-            else:
+            key = str(item.get('placeName', '')).strip().lower()
+            if key not in name_map:
                 rows.append([
-                    item.get('id'), item.get('timestamp'), name, item.get('category'), 
+                    item.get('id'), item.get('timestamp'), item.get('placeName'), item.get('category'), 
                     item.get('score'), item.get('estimatedLocation'), item.get('summary'), 
-                    item.get('fileName'), photo, item.get('mapsLink'), "", 0
+                    item.get('fileName'), item.get('photoUrl'), item.get('mapsLink'), "", 0
                 ])
         if rows: sheet.append_rows(rows)
         return jsonify({"status": "saved"})
@@ -327,5 +272,4 @@ def serve(path):
     return send_from_directory(app.static_folder, 'index.html')
 
 if __name__ == '__main__':
-    port = int(os.environ.get("PORT", 5000))
-    app.run(host='0.0.0.0', port=port)
+    app.run(host='0.0.0.0', port=int(os.environ.get("PORT", 5000)))
