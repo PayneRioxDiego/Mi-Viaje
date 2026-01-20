@@ -1,7 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Search, MapPin, AlertTriangle, Loader2, ChevronRight, Camera, Grid, Map as MapIcon, Layers, MessageCircle, Send } from 'lucide-react';
 import MapComponent from './MapComponent'; 
-import ReactMarkdown from 'react-markdown'; // Si esto falla, quita esta linea y renderiza texto plano, pero Markdown es mejor.
 
 interface TravelAnalysis {
   id: string; category: string; placeName: string; estimatedLocation: string;
@@ -127,12 +126,15 @@ function App() {
       <div className="bg-white/80 backdrop-blur-md sticky top-0 z-[2000] border-b border-slate-200">
         <div className="max-w-6xl mx-auto px-4">
           <div className="flex items-center justify-between h-16">
-            <div className="flex items-center gap-2"> <span className="text-2xl">✈️</span> <span className="font-bold text-slate-800 tracking-tight hidden sm:inline">Travel Hunter</span> </div>
+            <div className="flex items-center gap-2"> 
+                <span className="text-2xl">✈️</span> 
+                {/* --- NOMBRE ACTUALIZADO --- */}
+                <span className="font-bold text-slate-800 tracking-tight hidden sm:inline">Bichibichi Guia Explorador</span> 
+            </div>
             <nav className="flex bg-slate-100 p-1 rounded-xl">
               <button onClick={() => setActiveTab('analyze')} className={`px-4 py-2 rounded-lg text-sm font-bold flex items-center gap-2 transition-all ${activeTab === 'analyze' ? 'bg-white text-indigo-600 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}> <Search className="h-4 w-4" /> <span className="hidden sm:inline">Analizar</span> </button>
               <button onClick={() => setActiveTab('cards')} className={`px-4 py-2 rounded-lg text-sm font-bold flex items-center gap-2 transition-all ${activeTab === 'cards' ? 'bg-white text-indigo-600 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}> <Grid className="h-4 w-4" /> <span className="hidden sm:inline">Mis Hallazgos</span> </button>
               <button onClick={() => setActiveTab('map')} className={`px-4 py-2 rounded-lg text-sm font-bold flex items-center gap-2 transition-all ${activeTab === 'map' ? 'bg-white text-indigo-600 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}> <MapIcon className="h-4 w-4" /> <span className="hidden sm:inline">Mapa Mundi</span> </button>
-              {/* --- NUEVA PESTAÑA DE CHAT --- */}
               <button onClick={() => setActiveTab('chat')} className={`px-4 py-2 rounded-lg text-sm font-bold flex items-center gap-2 transition-all ${activeTab === 'chat' ? 'bg-indigo-600 text-white shadow-md shadow-indigo-300' : 'text-slate-500 hover:text-slate-700'}`}> <MessageCircle className="h-4 w-4" /> <span className="hidden sm:inline">Guía IA</span> </button>
             </nav>
           </div>
@@ -165,10 +167,8 @@ function App() {
           </div>
         )}
 
-        {/* --- INTERFAZ DEL CHAT --- */}
         {activeTab === 'chat' && (
           <div className="animate-fade-in max-w-3xl mx-auto h-[calc(100vh-180px)] flex flex-col bg-white rounded-3xl shadow-2xl border border-slate-100 overflow-hidden">
-             {/* Header del Chat */}
              <div className="bg-indigo-600 p-4 flex items-center gap-3">
                 <div className="h-10 w-10 bg-white/20 rounded-full flex items-center justify-center text-white backdrop-blur-sm">🤖</div>
                 <div>
@@ -176,13 +176,10 @@ function App() {
                     <p className="text-indigo-100 text-xs">Experto en tus {history.length} lugares guardados</p>
                 </div>
              </div>
-
-             {/* Área de Mensajes */}
              <div className="flex-grow overflow-y-auto p-6 space-y-4 bg-slate-50">
                 {messages.map((msg, idx) => (
                     <div key={idx} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
                         <div className={`max-w-[80%] px-5 py-3 rounded-2xl text-sm leading-relaxed shadow-sm ${msg.role === 'user' ? 'bg-indigo-600 text-white rounded-br-none' : 'bg-white text-slate-700 border border-slate-200 rounded-bl-none'}`}>
-                            {/* Renderizado simple de texto, o Markdown si quieres */}
                             <div className="whitespace-pre-wrap">{msg.text}</div>
                         </div>
                     </div>
@@ -197,8 +194,6 @@ function App() {
                 )}
                 <div ref={chatEndRef} />
              </div>
-
-             {/* Input Area */}
              <div className="p-4 bg-white border-t border-slate-100">
                 <div className="flex gap-2">
                     <input 
