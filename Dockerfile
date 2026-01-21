@@ -14,19 +14,23 @@ RUN npm run build
 # --- ETAPA 2: Servidor (Python 3.11) ---
 FROM python:3.11-slim
 
-# Instalamos ffmpeg (Necesario para procesar video)
-RUN apt-get update && \
-    apt-get install -y ffmpeg && \
-    apt-get clean
-
 WORKDIR /app
 
-# Instalamos dependencias
+# --- AQUÍ ESTÁ EL ARREGLO ---
+# Instalamos ffmpeg (video) Y git (para descargar yt-dlp actualizado)
+RUN apt-get update && \
+    apt-get install -y ffmpeg git && \
+    apt-get clean && \
+    rm -rf /var/lib/apt/lists/*
+
+# Instalamos dependencias (Ahora sí funcionará git+https...)
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copiamos todo lo demás (incluido el frontend construido)
+# Copiamos el frontend construido en la Etapa 1
 COPY --from=build-step /app/dist ./dist
+
+# Copiamos el resto del código del servidor
 COPY . .
 
 # Variables
@@ -35,6 +39,4 @@ ENV PORT=5000
 
 EXPOSE 5000
 
-# --- CAMBIO CRÍTICO AQUÍ ---
-# Usamos python directo para ahorrar memoria RAM y evitar error de dependencia
 CMD ["python", "server.py"]
