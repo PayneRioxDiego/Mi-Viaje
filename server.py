@@ -22,7 +22,7 @@ load_dotenv()
 API_KEY = os.getenv("API_KEY")
 UNSPLASH_KEY = os.getenv("UNSPLASH_ACCESS_KEY") 
 
-print("🚀 INICIANDO: BICHIBICHI SERVER (MODO 8 CATEGORÍAS)...", flush=True)
+print("🚀 INICIANDO: BICHIBICHI SERVER (MODO JUEZ IMPLACABLE)...", flush=True)
 
 if not API_KEY: print("❌ FATAL: API_KEY no encontrada.", flush=True)
 else:
@@ -61,7 +61,6 @@ def verify_location_hybrid(place_name, location_hint, ai_lat=None, ai_lng=None):
     final_lng = ai_lng
     final_address = f"{place_name}, {location_hint}"
     
-    # Si la IA falló con las coordenadas, usamos Nominatim
     if not final_lat or not final_lng or final_lat == 0:
         headers = { 'User-Agent': 'BichibichiApp/2.0', 'Accept-Language': 'es-ES' }
         try:
@@ -75,10 +74,8 @@ def verify_location_hybrid(place_name, location_hint, ai_lat=None, ai_lng=None):
                 final_address = data[0].get('display_name')
         except: pass
 
-    # Buscamos foto bonita
     photo_url = get_unsplash_photo(f"{place_name} {location_hint} travel")
     
-    # Generamos link de Google Maps
     if final_lat and final_lng and final_lat != 0: 
         maps_link = f"https://www.google.com/maps/search/?api=1&query={final_lat},{final_lng}"
     else: 
@@ -98,21 +95,27 @@ def process_single_item(item):
             
         ai_lat = clean_coord(item.get("lat", 0))
         ai_lng = clean_coord(item.get("lng", 0))
-        
         geo_data = verify_location_hybrid(guessed_name, guessed_loc, ai_lat, ai_lng)
-        
-        # La categoría ya viene limpia del Prompt, pero por seguridad:
         raw_cat = str(item.get("category") or "Otros")
+        
+        # Juntamos el juicio crítico con el resumen para que se vea en la tarjeta
+        raw_summary = str(item.get("summary") or "")
+        critical_verdict = str(item.get("criticalVerdict") or "")
+        
+        # Si hay juicio crítico, lo ponemos primero en negrita (simulado para texto plano)
+        final_summary = raw_summary
+        if critical_verdict and critical_verdict not in raw_summary:
+            final_summary = f"VEREDICTO: {critical_verdict}. {raw_summary}"
         
         return {
             "id": str(uuid.uuid4()), 
             "timestamp": int(time.time() * 1000), 
-            "category": raw_cat, # Usamos lo que mandó Gemini
+            "category": raw_cat, 
             "placeName": geo_data["officialName"],
             "estimatedLocation": geo_data["address"], 
             "priceRange": str(item.get("priceRange") or "N/A"), 
-            "summary": str(item.get("summary") or ""), 
-            "score": item.get("score") or 0,
+            "summary": final_summary, 
+            "score": float(item.get("score") or 4.0),
             "isTouristTrap": bool(item.get("isTouristTrap")), 
             "fileName": "Video TikTok", 
             "photoUrl": geo_data["photoUrl"], 
@@ -120,7 +123,7 @@ def process_single_item(item):
             "lat": geo_data["lat"], 
             "lng": geo_data["lng"], 
             "confidenceLevel": "Alto", 
-            "criticalVerdict": "", 
+            "criticalVerdict": critical_verdict, 
             "realRating": 0, 
             "website": "", 
             "openNow": ""
@@ -132,14 +135,7 @@ def download_video(url):
     print(f"⬇️ Descargando: {url}", flush=True)
     temp_dir = tempfile.mkdtemp()
     tmpl = os.path.join(temp_dir, f'video_{int(time.time())}.%(ext)s')
-    # Opciones optimizadas para velocidad y compatibilidad
-    opts = { 
-        'format': 'worst[ext=mp4]', 
-        'outtmpl': tmpl, 
-        'quiet': True, 
-        'no_warnings': True, 
-        'nocheckcertificate': True 
-    }
+    opts = { 'format': 'worst[ext=mp4]', 'outtmpl': tmpl, 'quiet': True, 'no_warnings': True, 'nocheckcertificate': True }
     try:
         with yt_dlp.YoutubeDL(opts) as ydl: ydl.download([url])
         files = glob.glob(os.path.join(temp_dir, 'video_*'))
@@ -147,49 +143,52 @@ def download_video(url):
         return files[0] if files else None
     except: return None
 
-# --- ANÁLISIS CON GEMINI (CEREBRO PRINCIPAL) ---
+# --- ANÁLISIS CON GEMINI (MODO JUEZ) ---
 def analyze_with_gemini(video_path):
     print(f"📤 Subiendo a Gemini...", flush=True)
     video_file = genai.upload_file(path=video_path)
     
-    # Esperar a que procese
     while video_file.state.name == "PROCESSING": 
         time.sleep(1)
         video_file = genai.get_file(video_file.name)
         
     model = genai.GenerativeModel(model_name="gemini-2.5-flash")
     
-    # --- PROMPT OFICIAL 8 CATEGORÍAS ---
+    # --- PROMPT CRÍTICO ---
     prompt = """
     Analiza este video de viajes.
-    OBJETIVO: Extraer datos JSON en ESPAÑOL.
-    MAPA: Latitud (lat) y Longitud (lng) numéricas exactas.
-    PRECIO: Valor real (ej: "$5 USD", "Gratis") si existe.
     
-    IMPORTANTE - CATEGORÍA (ELIGE SOLO UNA):
-    Clasifica el lugar ÚNICAMENTE en una de estas 8 categorías exactas.
-    PROHIBIDO usar barras "/" o inventar nuevas. Si dudas, elige la función PRINCIPAL.
+    ERES UN CRÍTICO DE VIAJES EXPERTO Y ESCÉPTICO.
+    NO repitas como loro lo que dice el Tiktoker. Tu trabajo es JUZGAR si vale la pena.
     
-    1. Naturaleza
-    2. Cultura
-    3. Gastronomía
-    4. Aventura
-    5. Alojamiento
-    6. Compras
-    7. Urbano
-    8. Servicios
+    1. CATEGORÍA (ELIGE SOLO UNA):
+       [Naturaleza, Cultura, Gastronomía, Aventura, Alojamiento, Compras, Urbano, Servicios]
     
+    2. SCORE (1.0 a 5.0):
+       - Si parece publicidad engañosa o "Tourist Trap", castiga la nota (bájala).
+       - Si el lugar se ve sucio, lleno o caro, baja la nota aunque el Tiktoker sonría.
+       - Si no hay nota, INFIERE una basada en la CALIDAD REAL que ves en el video. NUNCA 0.
+       
+    3. SUMMARY (Tu Veredicto):
+       - No describas solo "qué es". Di si vale la pena.
+       - Ej: "Aunque el video dice que es barato, el menú muestra precios de aeropuerto. Se ve sobrevalorado."
+       
+    4. ¿ES TRAMPA TURÍSTICA? (isTouristTrap):
+       - True si: Es solo para fotos de Instagram, es carísimo sin razón, o la comida se ve plástica.
+       - False si: Es auténtico, buen precio/calidad.
+
     OUTPUT JSON:
     [{
-      "category": "Alojamiento", 
-      "placeName": "Hotel Selina", 
-      "estimatedLocation": "Cusco, Perú", 
-      "lat": -13.522, 
-      "lng": -71.967, 
-      "priceRange": "$40 USD/noche", 
-      "summary": "Hostal con coworking...", 
-      "score": 4.2, 
-      "isTouristTrap": false
+      "category": "Gastronomía", 
+      "placeName": "Restaurante X", 
+      "estimatedLocation": "Lima, Perú", 
+      "lat": -12.046, 
+      "lng": -77.042, 
+      "priceRange": "$50 USD (Caro)", 
+      "summary": "El Tiktoker dice que es el mejor sushi, pero el arroz se ve masacote y el lugar está vacío. Parece trampa para turistas.", 
+      "score": 2.5, 
+      "isTouristTrap": true,
+      "criticalVerdict": "Sobrevalorado y posiblemente pagado"
     }]
     """
     
@@ -198,14 +197,12 @@ def analyze_with_gemini(video_path):
         raw_data = json.loads(response.text.replace("```json", "").replace("```", "").strip())
     except: raw_data = []
     
-    # Limpieza
     try: genai.delete_file(video_file.name)
     except: pass
     
     if isinstance(raw_data, dict): raw_data = [raw_data]
     
     final_results = []
-    # Procesamiento paralelo para coordenadas y fotos
     with ThreadPoolExecutor(max_workers=5) as executor:
         results = list(executor.map(process_single_item, raw_data))
         final_results = [r for r in results if r is not None]
@@ -231,64 +228,42 @@ def chat_guide():
     try:
         data = request.json
         user_message = data.get('message', '')
-        
-        # 1. Leemos tus lugares guardados
         sheet = get_db_connection()
-        if not sheet: return jsonify({"reply": "No puedo acceder a tu base de datos. Revisa tus credenciales."})
-        
+        if not sheet: return jsonify({"reply": "No puedo acceder a tu base de datos."})
         raw_places = sheet.get_all_records()
-        
-        # Contexto ligero para el chat
         places_context = []
         for p in raw_places:
-            places_context.append(f"- {p.get('placeName')} ({p.get('category')}): Ubicado en {p.get('estimatedLocation')}. Precio: {p.get('priceRange')}.")
-        
-        places_str = "\n".join(places_context[-50:]) # Enviamos los últimos 50 para no saturar
+            places_context.append(f"- {p.get('placeName')} ({p.get('category')}): {p.get('summary')} Score: {p.get('score')}")
+        places_str = "\n".join(places_context[-50:])
 
-        # 2. Prompt del Guía
         model = genai.GenerativeModel(model_name="gemini-2.5-flash")
-        
         prompt = f"""
-        Actúa como un Guía de Viajes experto llamado "Bichibichi Guide".
-        
-        TIENES ACCESO A LA SIGUIENTE BASE DE DATOS DE LUGARES QUE EL USUARIO HA GUARDADO:
+        Actúa como un Guía de Viajes SINCERO llamado "Bichibichi Guide".
+        TIENES ACCESO A ESTOS LUGARES:
         {places_str}
-        
-        EL USUARIO PREGUNTA: "{user_message}"
-        
-        TU MISIÓN:
-        1. Responde basándote PRINCIPALMENTE en los lugares de la lista de arriba.
-        2. Si pide una ruta, agrupa los lugares por cercanía.
-        3. Sé proactivo.
-        4. Habla siempre en Español Latino y usa emojis.
+        USUARIO: "{user_message}"
+        MISIÓN: Responde con honestidad. Si un lugar tiene mala nota en la lista, adviértele al usuario.
         """
-        
         response = model.generate_content(prompt)
         return jsonify({"reply": response.text})
-
     except Exception as e:
         print(f"Error chat: {e}")
-        return jsonify({"reply": "Lo siento, me mareé intentando leer el mapa. Intenta de nuevo."})
+        return jsonify({"reply": "Error en el chat."})
 
 @app.route('/api/history', methods=['POST', 'GET'])
 def handle_history():
     sheet = get_db_connection()
-    
-    # LEER HISTORIAL
     if request.method == 'GET':
         if not sheet: return jsonify([])
         try:
             raw = sheet.get_all_records()
             clean = []
             for row in raw:
-                # Normalizamos las keys a minúsculas para evitar errores
                 r = {k.lower().strip(): v for k, v in row.items()}
-                
                 try: lat_val = float(str(r.get('lat', 0)).replace(',', '.'))
                 except: lat_val = 0.0
                 try: lng_val = float(str(r.get('lng', 0)).replace(',', '.'))
                 except: lng_val = 0.0
-                
                 clean.append({
                     "id": str(r.get('id') or uuid.uuid4()), 
                     "placeName": str(r.get('placename') or "Lugar"), 
@@ -306,43 +281,25 @@ def handle_history():
             return jsonify(clean)
         except: return jsonify([])
 
-    # GUARDAR EN HISTORIAL
     try: 
         new_items = request.json
         if not isinstance(new_items, list): new_items = [new_items]
         if not sheet: return jsonify({"status": "local"})
-        
         existing = sheet.get_all_records()
-        # Mapa para evitar duplicados por nombre
         name_map = {str(r.get('placeName', '')).strip().lower(): i+2 for i, r in enumerate(existing)}
-        
         rows = []
         for item in new_items:
             key = str(item.get('placeName', '')).strip().lower()
             if key not in name_map:
                 rows.append([
-                    item.get('id'), 
-                    item.get('timestamp'), 
-                    item.get('placeName'), 
-                    item.get('category'), 
-                    item.get('score'), 
-                    item.get('estimatedLocation'), 
-                    item.get('summary'), 
-                    item.get('fileName'), 
-                    item.get('photoUrl'), 
-                    item.get('mapsLink'), 
-                    item.get('website') or "", 
-                    0, 
-                    item.get('isTouristTrap'), 
-                    item.get('priceRange'), 
-                    item.get('lat'), 
-                    item.get('lng')
+                    item.get('id'), item.get('timestamp'), item.get('placeName'), item.get('category'), item.get('score'), 
+                    item.get('estimatedLocation'), item.get('summary'), item.get('fileName'), item.get('photoUrl'), 
+                    item.get('mapsLink'), item.get('website') or "", 0, item.get('isTouristTrap'), item.get('priceRange'), item.get('lat'), item.get('lng')
                 ])
         if rows: sheet.append_rows(rows)
         return jsonify({"status": "saved"})
     except: return jsonify({"error": "save"}), 500
 
-# --- SERVIR FRONTEND ---
 @app.route('/', defaults={'path': ''})
 @app.route('/<path:path>')
 def serve(path):
