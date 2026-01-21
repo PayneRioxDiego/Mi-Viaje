@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Search, MapPin, AlertTriangle, Loader2, ChevronRight, Camera, Grid, Map as MapIcon, Layers, MessageCircle, Send, Filter, X } from 'lucide-react';
+import { Search, MapPin, AlertTriangle, Loader2, ChevronRight, Camera, Grid, Map as MapIcon, Layers, MessageCircle, Send, Filter, X, Trash2 } from 'lucide-react';
 import MapComponent from './MapComponent'; 
 
 interface TravelAnalysis {
@@ -27,14 +27,23 @@ function App() {
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedCategory, setSelectedCategory] = useState('Todas');
 
-  // Estados del Chat
-  const [messages, setMessages] = useState<ChatMessage[]>([{role: 'bot', text: '¡Hola! Soy tu Guía de Viajes. Conozco todos los lugares que has guardado. Pregúntame por una ruta, recomendaciones o qué visitar primero. 🗺️'}]);
+  // --- CHAT CON MEMORIA (Persistencia) ---
+  const [messages, setMessages] = useState<ChatMessage[]>(() => {
+      // 1. Intentamos leer del almacenamiento local al iniciar
+      const saved = localStorage.getItem('bichibichi_chat');
+      return saved ? JSON.parse(saved) : [{role: 'bot', text: '¡Hola! Soy tu Guía de Viajes. Conozco todos los lugares que has guardado. Pregúntame por una ruta, recomendaciones o qué visitar primero. 🗺️'}];
+  });
   const [inputMsg, setInputMsg] = useState('');
   const [chatLoading, setChatLoading] = useState(false);
   const chatEndRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => { fetchHistory(); }, []);
-  useEffect(() => { chatEndRef.current?.scrollIntoView({ behavior: "smooth" }); }, [messages]);
+  
+  // 2. Efecto para guardar el chat cada vez que cambia
+  useEffect(() => {
+      localStorage.setItem('bichibichi_chat', JSON.stringify(messages));
+      chatEndRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, [messages]);
 
   const fetchHistory = async () => {
     try {
@@ -134,7 +143,6 @@ function App() {
 
   const TravelCard = ({ item }: { item: TravelAnalysis }) => {
     const safeSummary = item.summary || "";
-    // Ya no ocultamos nada, mostramos el resumen crudo completo
     return (
       <div className="group bg-white rounded-[2rem] overflow-hidden shadow-lg shadow-slate-200/50 hover:shadow-2xl transition-all duration-300 border border-slate-100 flex flex-col h-full">
         <div className="relative h-56 overflow-hidden shrink-0">
@@ -150,9 +158,8 @@ function App() {
           <h3 className="text-lg font-black text-slate-800 mb-1 leading-tight">{item.placeName || "Desconocido"}</h3>
           <div className="flex items-center text-slate-400 text-xs mb-3"> <MapPin className="h-3 w-3 mr-1" /> <span className="truncate">{item.estimatedLocation || "Ubicación desconocida"}</span> </div>
           
-          {/* --- AQUÍ ESTÁ EL ARREGLO DEL TEXTO --- */}
           <div className="bg-slate-50 p-3 rounded-xl mb-4 flex-grow border border-slate-100"> 
-             {/* Cambiado line-clamp-4 por h-24 overflow-y-auto (Scroll si es largo) */}
+             {/* Resumen con scroll interno para textos largos */}
              <p className="text-slate-600 text-xs leading-relaxed h-24 overflow-y-auto pr-1 scrollbar-thin scrollbar-thumb-slate-300">
                 {safeSummary}
              </p> 
@@ -223,9 +230,23 @@ function App() {
 
         {activeTab === 'chat' && (
           <div className="animate-fade-in max-w-3xl mx-auto h-[calc(100vh-180px)] flex flex-col bg-white rounded-3xl shadow-2xl border border-slate-100 overflow-hidden">
-             <div className="bg-indigo-600 p-4 flex items-center gap-3">
-                <div className="h-10 w-10 bg-white/20 rounded-full flex items-center justify-center text-white backdrop-blur-sm">🤖</div>
-                <div> <h3 className="text-white font-bold">Guía de Viajes IA</h3> <p className="text-indigo-100 text-xs">Experto en tus {history.length} lugares guardados</p> </div>
+             <div className="bg-indigo-600 p-4 flex items-center justify-between">
+                <div className="flex items-center gap-3">
+                    <div className="h-10 w-10 bg-white/20 rounded-full flex items-center justify-center text-white backdrop-blur-sm">🤖</div>
+                    <div> <h3 className="text-white font-bold">Guía de Viajes IA</h3> <p className="text-indigo-100 text-xs">Experto en tus {history.length} lugares guardados</p> </div>
+                </div>
+                <button 
+                    onClick={() => {
+                        if(confirm('¿Borrar conversación?')) {
+                            setMessages([{role: 'bot', text: '¡Hola! Soy tu Guía de Viajes. ¿Empezamos de nuevo? 🗺️'}]);
+                            localStorage.removeItem('bichibichi_chat');
+                        }
+                    }}
+                    className="text-white/70 hover:text-white p-2 rounded-full hover:bg-white/10 transition-all"
+                    title="Borrar historial"
+                >
+                    <Trash2 className="h-5 w-5" />
+                </button>
              </div>
              <div className="flex-grow overflow-y-auto p-6 space-y-4 bg-slate-50">
                 {messages.map((msg, idx) => ( <div key={idx} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}> <div className={`max-w-[80%] px-5 py-3 rounded-2xl text-sm leading-relaxed shadow-sm ${msg.role === 'user' ? 'bg-indigo-600 text-white rounded-br-none' : 'bg-white text-slate-700 border border-slate-200 rounded-bl-none'}`}> <div className="whitespace-pre-wrap">{msg.text}</div> </div> </div> ))}
