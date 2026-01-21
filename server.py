@@ -22,7 +22,7 @@ load_dotenv()
 API_KEY = os.getenv("API_KEY")
 UNSPLASH_KEY = os.getenv("UNSPLASH_ACCESS_KEY") 
 
-print("🚀 INICIANDO: BICHIBICHI SERVER (MODO JUEZ IMPLACABLE)...", flush=True)
+print("🚀 INICIANDO: BICHIBICHI SERVER (MODO EVOLUTIVO)...", flush=True)
 
 if not API_KEY: print("❌ FATAL: API_KEY no encontrada.", flush=True)
 else:
@@ -98,11 +98,8 @@ def process_single_item(item):
         geo_data = verify_location_hybrid(guessed_name, guessed_loc, ai_lat, ai_lng)
         raw_cat = str(item.get("category") or "Otros")
         
-        # Juntamos el juicio crítico con el resumen para que se vea en la tarjeta
         raw_summary = str(item.get("summary") or "")
         critical_verdict = str(item.get("criticalVerdict") or "")
-        
-        # Si hay juicio crítico, lo ponemos primero en negrita (simulado para texto plano)
         final_summary = raw_summary
         if critical_verdict and critical_verdict not in raw_summary:
             final_summary = f"VEREDICTO: {critical_verdict}. {raw_summary}"
@@ -124,7 +121,7 @@ def process_single_item(item):
             "lng": geo_data["lng"], 
             "confidenceLevel": "Alto", 
             "criticalVerdict": critical_verdict, 
-            "realRating": 0, 
+            "realRating": 1, # Iniciamos en 1 review
             "website": "", 
             "openNow": ""
         }
@@ -143,7 +140,7 @@ def download_video(url):
         return files[0] if files else None
     except: return None
 
-# --- ANÁLISIS CON GEMINI (MODO JUEZ) ---
+# --- ANÁLISIS CON GEMINI ---
 def analyze_with_gemini(video_path):
     print(f"📤 Subiendo a Gemini...", flush=True)
     video_file = genai.upload_file(path=video_path)
@@ -154,28 +151,22 @@ def analyze_with_gemini(video_path):
         
     model = genai.GenerativeModel(model_name="gemini-2.5-flash")
     
-    # --- PROMPT CRÍTICO ---
     prompt = """
     Analiza este video de viajes.
-    
     ERES UN CRÍTICO DE VIAJES EXPERTO Y ESCÉPTICO.
-    NO repitas como loro lo que dice el Tiktoker. Tu trabajo es JUZGAR si vale la pena.
     
     1. CATEGORÍA (ELIGE SOLO UNA):
        [Naturaleza, Cultura, Gastronomía, Aventura, Alojamiento, Compras, Urbano, Servicios]
     
     2. SCORE (1.0 a 5.0):
-       - Si parece publicidad engañosa o "Tourist Trap", castiga la nota (bájala).
-       - Si el lugar se ve sucio, lleno o caro, baja la nota aunque el Tiktoker sonría.
-       - Si no hay nota, INFIERE una basada en la CALIDAD REAL que ves en el video. NUNCA 0.
+       - Si parece publicidad engañosa o "Tourist Trap", castiga la nota.
+       - Si no hay nota, INFIERE una basada en la CALIDAD REAL. NUNCA 0.
        
     3. SUMMARY (Tu Veredicto):
-       - No describas solo "qué es". Di si vale la pena.
-       - Ej: "Aunque el video dice que es barato, el menú muestra precios de aeropuerto. Se ve sobrevalorado."
+       - Di si vale la pena. Ej: "Dice ser barato pero es caro."
        
     4. ¿ES TRAMPA TURÍSTICA? (isTouristTrap):
-       - True si: Es solo para fotos de Instagram, es carísimo sin razón, o la comida se ve plástica.
-       - False si: Es auténtico, buen precio/calidad.
+       - True/False.
 
     OUTPUT JSON:
     [{
@@ -184,11 +175,11 @@ def analyze_with_gemini(video_path):
       "estimatedLocation": "Lima, Perú", 
       "lat": -12.046, 
       "lng": -77.042, 
-      "priceRange": "$50 USD (Caro)", 
-      "summary": "El Tiktoker dice que es el mejor sushi, pero el arroz se ve masacote y el lugar está vacío. Parece trampa para turistas.", 
+      "priceRange": "$50 USD", 
+      "summary": "Veredicto: Sobrevalorado.", 
       "score": 2.5, 
       "isTouristTrap": true,
-      "criticalVerdict": "Sobrevalorado y posiblemente pagado"
+      "criticalVerdict": "Sobrevalorado"
     }]
     """
     
@@ -242,7 +233,7 @@ def chat_guide():
         TIENES ACCESO A ESTOS LUGARES:
         {places_str}
         USUARIO: "{user_message}"
-        MISIÓN: Responde con honestidad. Si un lugar tiene mala nota en la lista, adviértele al usuario.
+        MISIÓN: Responde con honestidad.
         """
         response = model.generate_content(prompt)
         return jsonify({"reply": response.text})
@@ -260,45 +251,95 @@ def handle_history():
             clean = []
             for row in raw:
                 r = {k.lower().strip(): v for k, v in row.items()}
-                try: lat_val = float(str(r.get('lat', 0)).replace(',', '.'))
-                except: lat_val = 0.0
-                try: lng_val = float(str(r.get('lng', 0)).replace(',', '.'))
-                except: lng_val = 0.0
+                # Usamos la columna 12 (que puede llamarse realReviews)
                 clean.append({
-                    "id": str(r.get('id') or uuid.uuid4()), 
-                    "placeName": str(r.get('placename') or "Lugar"), 
-                    "estimatedLocation": str(r.get('estimatedlocation') or ""),
-                    "category": str(r.get('category') or "General"), 
-                    "score": r.get('score') or 0, 
-                    "summary": str(r.get('summary') or ""),
-                    "photoUrl": str(r.get('photourl') or ""), 
-                    "mapsLink": str(r.get('mapslink') or ""), 
+                    "id": str(r.get('id')), 
+                    "placeName": str(r.get('placename')), 
+                    "estimatedLocation": str(r.get('estimatedlocation')),
+                    "category": str(r.get('category')), 
+                    "score": r.get('score'), 
+                    "summary": str(r.get('summary')),
+                    "photoUrl": str(r.get('photourl')), 
+                    "mapsLink": str(r.get('mapslink')), 
                     "isTouristTrap": str(r.get('istouristtrap')).lower() == 'true',
-                    "priceRange": str(r.get('pricerange') or "N/A"), 
-                    "lat": lat_val, 
-                    "lng": lng_val
+                    "priceRange": str(r.get('pricerange')), 
+                    "lat": r.get('lat'), 
+                    "lng": r.get('lng')
                 })
             return jsonify(clean)
         except: return jsonify([])
 
+    # GUARDAR O ACTUALIZAR (OPCIÓN B)
     try: 
         new_items = request.json
         if not isinstance(new_items, list): new_items = [new_items]
         if not sheet: return jsonify({"status": "local"})
+        
         existing = sheet.get_all_records()
+        # Mapeamos nombre -> índice de fila (Google Sheets empieza en 2)
         name_map = {str(r.get('placeName', '')).strip().lower(): i+2 for i, r in enumerate(existing)}
-        rows = []
+        
+        rows_to_append = []
+        
         for item in new_items:
             key = str(item.get('placeName', '')).strip().lower()
-            if key not in name_map:
-                rows.append([
-                    item.get('id'), item.get('timestamp'), item.get('placeName'), item.get('category'), item.get('score'), 
-                    item.get('estimatedLocation'), item.get('summary'), item.get('fileName'), item.get('photoUrl'), 
-                    item.get('mapsLink'), item.get('website') or "", 0, item.get('isTouristTrap'), item.get('priceRange'), item.get('lat'), item.get('lng')
+            new_score = float(item.get('score', 0))
+            
+            if key in name_map:
+                # --- LÓGICA DE FUSIÓN ---
+                row_idx = name_map[key]
+                print(f"🔄 Actualizando existente: {key} en fila {row_idx}", flush=True)
+                
+                # Leemos datos actuales de la memoria local para no gastar quota de lectura
+                # Recordar: existing es una lista 0-based. Fila 2 de Sheets es existing[0]
+                curr_record = existing[row_idx - 2]
+                
+                try: old_score = float(curr_record.get('score', 0) or 0)
+                except: old_score = 0.0
+                
+                # Usamos la columna 'realReviews' (la 12) como contador
+                # Ojo: chequea cómo se llama la columna en tu sheet (si es columna L)
+                # Si está vacía o es 0, asumimos que era 1
+                try: count = int(curr_record.get('realReviews', 0) or 1)
+                except: count = 1
+                if count == 0: count = 1
+                
+                # Cálculo de promedio ponderado
+                new_count = count + 1
+                final_avg = ((old_score * count) + new_score) / new_count
+                final_avg = round(final_avg, 1)
+                
+                # Actualizamos Score (Col 5) y Contador (Col 12)
+                # Nota: Esto es lento si son muchos, pero seguro para 1 a 1
+                sheet.update_cell(row_idx, 5, final_avg)
+                sheet.update_cell(row_idx, 12, new_count)
+                
+            else:
+                # --- ES NUEVO: APPEND ---
+                rows_to_append.append([
+                    item.get('id'), 
+                    item.get('timestamp'), 
+                    item.get('placeName'), 
+                    item.get('category'), 
+                    item.get('score'), 
+                    item.get('estimatedLocation'), 
+                    item.get('summary'), 
+                    item.get('fileName'), 
+                    item.get('photoUrl'), 
+                    item.get('mapsLink'), 
+                    item.get('website') or "", 
+                    1, # Columna 12 (realReviews) inicia en 1
+                    item.get('isTouristTrap'), 
+                    item.get('priceRange'), 
+                    item.get('lat'), 
+                    item.get('lng')
                 ])
-        if rows: sheet.append_rows(rows)
+                
+        if rows_to_append: sheet.append_rows(rows_to_append)
         return jsonify({"status": "saved"})
-    except: return jsonify({"error": "save"}), 500
+    except Exception as e: 
+        print(f"Error guardando: {e}")
+        return jsonify({"error": "save"}), 500
 
 @app.route('/', defaults={'path': ''})
 @app.route('/<path:path>')
