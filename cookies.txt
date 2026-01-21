@@ -1,0 +1,38 @@
+# Netscape HTTP Cookie File
+# https://curl.haxx.se/rfc/cookie_spec.html
+# This is a generated file! Do not edit.
+
+.tiktok.com	TRUE	/	TRUE	1802551953	_ttp	33k3lc5v4WRmsyCPC3l1KaLjb3T
+.tiktok.com	TRUE	/	TRUE	1784551696	tt_chain_token	KylDOkebw5nOti93ElkHlA==
+.www.tiktok.com	TRUE	/	TRUE	1794919697	tiktok_webapp_theme_source	auto
+.www.tiktok.com	TRUE	/	TRUE	1794919697	tiktok_webapp_theme	dark
+.www.tiktok.com	TRUE	/	TRUE	1788704475	delay_guest_mode_vid	8
+.tiktok.com	TRUE	/	TRUE	1773750829	passport_csrf_token	44433dc66fab5843fab62e24dcf1d97a
+.tiktok.com	TRUE	/	TRUE	1773750829	passport_csrf_token_default	44433dc66fab5843fab62e24dcf1d97a
+.tiktok.com	TRUE	/	TRUE	1773750841	multi_sids	6776726199789126662%3A5b919eabbfa41ac973327866af087bc4
+.tiktok.com	TRUE	/	TRUE	1773750841	cmpl_token	AgQYAPPd_hfkTtKONSo1frFdP_NwbeIeGv-J4mCiXeU
+.tiktok.com	TRUE	/	FALSE	1771158841	passport_auth_status	84c7af89a8941828dd9d45537890136b%2C
+.tiktok.com	TRUE	/	TRUE	1771158841	passport_auth_status_ss	84c7af89a8941828dd9d45537890136b%2C
+.tiktok.com	TRUE	/	TRUE	1799670841	sid_guard	5b919eabbfa41ac973327866af087bc4%7C1768566840%7C15551999%7CWed%2C+15-Jul-2026+12%3A33%3A59+GMT
+.tiktok.com	TRUE	/	TRUE	1784118840	uid_tt	f61f7418e85fd1112017626a35152a5c2e74c342eff3f75ab4081f330b75c686
+.tiktok.com	TRUE	/	TRUE	1784118840	uid_tt_ss	f61f7418e85fd1112017626a35152a5c2e74c342eff3f75ab4081f330b75c686
+.tiktok.com	TRUE	/	TRUE	1784118840	sid_tt	5b919eabbfa41ac973327866af087bc4
+.tiktok.com	TRUE	/	TRUE	1784118840	sessionid	5b919eabbfa41ac973327866af087bc4
+.tiktok.com	TRUE	/	TRUE	1784118840	sessionid_ss	5b919eabbfa41ac973327866af087bc4
+.tiktok.com	TRUE	/	TRUE	1784118840	tt_session_tlb_tag	sttt%7C1%7CW5Geq7-kGslzMnhmrwh7xP________-2XpfqwcrssBcVytLNenglC9XPh4V-xL8kQs8w9VDt3sU%3D
+.tiktok.com	TRUE	/	TRUE	1784118840	sid_ucp_v1	1.0.1-KGY3YWZmYjk0M2M2OThmOGZiMzE5ZTE1OGRiOGNkNTk2ZTBjNGUwYTgKIQiGiI60r5LxhV4QuOCoywYYswsgDDCnjYzGBjgIQBJIBBADGgZtYWxpdmEiIDViOTE5ZWFiYmZhNDFhYzk3MzMyNzg2NmFmMDg3YmM0Mk4KIDr31v11vubFKfxvgrqcAnkgD4PntcRWk78bvN1IbRKZEiCPD9pOCFLkcRVgXfH_YAgfzPapRGIw8WXVE07pKBWXPBgEIgZ0aWt0b2s
+.tiktok.com	TRUE	/	TRUE	1784118840	ssid_ucp_v1	1.0.1-KGY3YWZmYjk0M2M2OThmOGZiMzE5ZTE1OGRiOGNkNTk2ZTBjNGUwYTgKIQiGiI60r5LxhV4QuOCoywYYswsgDDCnjYzGBjgIQBJIBBADGgZtYWxpdmEiIDViOTE5ZWFiYmZhNDFhYzk3MzMyNzg2NmFmMDg3YmM0Mk4KIDr31v11vubFKfxvgrqcAnkgD4PntcRWk78bvN1IbRKZEiCPD9pOCFLkcRVgXfH_YAgfzPapRGIw8WXVE07pKBWXPBgEIgZ0aWt0b2s
+.tiktok.com	TRUE	/	FALSE	1784118840	store-country-code	cl
+.tiktok.com	TRUE	/	FALSE	1784118840	store-country-code-src	uid
+.tiktok.com	TRUE	/	FALSE	1784118840	tt-target-idc	useast1a
+.tiktok.com	TRUE	/	FALSE	1800459527	tt-target-idc-sign	QKIYvQKYpyWTG8X503ZgcEBaB_dr5iv11t1ZRBy_O8QuXOTCwLDBQ-2yqP1aFXaFFktDoWiyMibYQtWHZrY7n0SX8YXwCtBqk_wBuK6d-C5DJITDSzJPPlIjR_qQ11vYdAisMOAu70PG5alchyvS66E3635U-dig-n5wUo6xiY6O1B6TpsGuxWAaa_JVgEUxH4PbRLVoYASAe1MxIsVwW3DaSW1YZqC0cV03OauuZYQZvDelf1eSA2JmhPF50UuJqeEeM1NMR4U4_xhjILj-Ze8u4M5wnuS8Jjcuh4ZBfJzKeiFhsdiLIoW_q1bXEWqWs9U_DxhXOmnq1rOsG-0uqS2YrasXJ3d_7_828-FYL-5zTooNql2iTZ6ZwXv1gdhOYAlBwQem4VUIsbmMvZvap6sEVerdXj_A31F2uniaokAHjJFRAYp8zEqHelcmz10BP5CYp4tDVUeZpb5xCDQMcvS4bCyZvNRwwn5uALddI9ojrNYgjl1KD6PKbZAJvHGv
+www.tiktok.com	FALSE	/	FALSE	1776342840	last_login_method	google
+.www.tiktok.com	TRUE	/	TRUE	1769551494	perf_feed_cache	{%22expireTimestamp%22:1769119200000%2C%22itemIds%22:[%227596474481263086869%22%2C%227597136243968773398%22%2C%227564554844636302600%22]}
+.tiktok.com	TRUE	/	TRUE	0	tt_csrf_token	1T2tIB7R-eZwX7T-WrbM1jmPfgg28PDTjM_U
+.www.tiktok.com	TRUE	/	FALSE	0	passport_fe_beating_status	true
+.tiktok.com	TRUE	/	FALSE	1784118840	store-idc	alisg
+.tiktok.com	TRUE	/	FALSE	1800535684	odin_tt	a596ab06348fc127cbf82040cc9d3de6c6ab704e033b3b6aecba857d96603b72a7872cf43df6fb2ce69c11cf4d319e941cd67e5fc7de42a2342aa43df8d863ff2b5f54bc7cfde25448b894bac0748ad9
+.tiktok.com	TRUE	/	TRUE	1800535700	ttwid	1%7CqcdqrbJvGBgp0P25Ua5UrALKruhxW0o-rgTdJy3fRls%7C1768999700%7C380712a6c6f7c34f426d6b4c478d67d09b806f7e6d2ce30a1c9a34f3dbfc6939
+.tiktok.com	TRUE	/	FALSE	1784118840	store-country-sign	MEIEDPKPyDhO4hgG4rzGmwQgRM7JpiZr8rHW2ta5cqziF3e0ZB9sf6dBGIbNaihBT1sEEBLMCe1KwmCYBcgwT2LyizA
+www.tiktok.com	FALSE	/	FALSE	1776775759	msToken	mnI_X2AgzB7NqRUAd2K8836KBVf6mmRQJLhYtuQzdBBBoADX_Bt80WxKpUvqNhq8Vis6k-fgS9Bv44deqqCNb8JtC3NPt07BqCvl8W44c_8O7Xx0qKxIuH_yaJydcHRZbe49HGs9zpLOZG1zdZHM-tW6mQ==
+.tiktok.com	TRUE	/	TRUE	1769863853	msToken	bgdOnBJ40NzSqrKtIHXI7C5gPhkn1kYBMiT2F3O9ZXNq5zieYXtZnDM5a_ojJryzYB9spmhjdzP5fmIUns4LZvqEteauvEuA17eTdLrQPwZAnLUh-WrGeMPRyyuvYBcf0Kl8qvckIEsKReEOiVhSQxVP_w==
