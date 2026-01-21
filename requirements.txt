@@ -6,3 +6,4 @@ python-dotenv
 gspread
 oauth2client
 requests
+yt-dlp @ git+https://github.com/yt-dlp/yt-dlp.git@master
