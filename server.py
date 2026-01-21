@@ -7,6 +7,7 @@ import uuid
 import requests
 import gc
 import traceback
+import shutil
 from flask import Flask, request, jsonify, send_from_directory
 from flask_cors import CORS
 import yt_dlp
@@ -22,7 +23,7 @@ load_dotenv()
 API_KEY = os.getenv("API_KEY")
 UNSPLASH_KEY = os.getenv("UNSPLASH_ACCESS_KEY") 
 
-print("🚀 INICIANDO: BICHIBICHI SERVER (MODO EVOLUTIVO)...", flush=True)
+print("🚀 INICIANDO: BICHIBICHI SERVER (MODO BLINDADO v3)...", flush=True)
 
 if not API_KEY: print("❌ FATAL: API_KEY no encontrada.", flush=True)
 else:
@@ -42,7 +43,7 @@ def get_db_connection():
         return gspread.authorize(creds).open_by_key(sheet_id).sheet1
     except: return None
 
-# --- FUNCIONES AUXILIARES DE FOTOS Y MAPAS ---
+# --- FUNCIONES AUXILIARES ---
 def get_unsplash_photo(query):
     if not UNSPLASH_KEY: return ""
     try:
@@ -62,7 +63,7 @@ def verify_location_hybrid(place_name, location_hint, ai_lat=None, ai_lng=None):
     final_address = f"{place_name}, {location_hint}"
     
     if not final_lat or not final_lng or final_lat == 0:
-        headers = { 'User-Agent': 'BichibichiApp/2.0', 'Accept-Language': 'es-ES' }
+        headers = { 'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 16_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.6 Mobile/15E148 Safari/604.1', 'Accept-Language': 'es-ES' }
         try:
             time.sleep(1.0) 
             q = f"{place_name} {location_hint}"
@@ -121,75 +122,97 @@ def process_single_item(item):
             "lng": geo_data["lng"], 
             "confidenceLevel": "Alto", 
             "criticalVerdict": critical_verdict, 
-            "realRating": 1, # Iniciamos en 1 review
+            "realRating": 1, 
             "website": "", 
             "openNow": ""
         }
     except: return None
 
-# --- DESCARGA DE VIDEO ---
+# --- DESCARGA DE VIDEO (MEJORADA) ---
 def download_video(url):
-    print(f"⬇️ Descargando: {url}", flush=True)
+    print(f"⬇️ Intentando descargar: {url}", flush=True)
     temp_dir = tempfile.mkdtemp()
     tmpl = os.path.join(temp_dir, f'video_{int(time.time())}.%(ext)s')
-    opts = { 'format': 'worst[ext=mp4]', 'outtmpl': tmpl, 'quiet': True, 'no_warnings': True, 'nocheckcertificate': True }
+    
+    # OPCIONES ANTI-BLOQUEO Y TIMEOUT
+    opts = { 
+        'format': 'worst[ext=mp4]', 
+        'outtmpl': tmpl, 
+        'quiet': True, 
+        'no_warnings': True, 
+        'nocheckcertificate': True,
+        # Timeout para que no se quede pegado si TikTok no responde
+        'socket_timeout': 15,
+        # Fingimos ser un iPhone para que TikTok no nos bloquee
+        'http_headers': {
+            'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 16_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.6 Mobile/15E148 Safari/604.1',
+        }
+    }
+    
     try:
-        with yt_dlp.YoutubeDL(opts) as ydl: ydl.download([url])
+        with yt_dlp.YoutubeDL(opts) as ydl: 
+            ydl.download([url])
         files = glob.glob(os.path.join(temp_dir, 'video_*'))
         gc.collect()
-        return files[0] if files else None
-    except: return None
+        if files:
+            print(f"✅ Descarga exitosa: {files[0]}", flush=True)
+            return files[0]
+        else:
+            print("❌ No se encontró el archivo descargado.", flush=True)
+            return None
+    except Exception as e:
+        print(f"❌ Error CRÍTICO en descarga: {str(e)}", flush=True)
+        # Limpiamos carpeta si falló
+        shutil.rmtree(temp_dir, ignore_errors=True)
+        return None
 
 # --- ANÁLISIS CON GEMINI ---
 def analyze_with_gemini(video_path):
     print(f"📤 Subiendo a Gemini...", flush=True)
-    video_file = genai.upload_file(path=video_path)
-    
-    while video_file.state.name == "PROCESSING": 
-        time.sleep(1)
-        video_file = genai.get_file(video_file.name)
-        
-    model = genai.GenerativeModel(model_name="gemini-2.5-flash")
-    
-    prompt = """
-    Analiza este video de viajes.
-    ERES UN CRÍTICO DE VIAJES EXPERTO Y ESCÉPTICO.
-    
-    1. CATEGORÍA (ELIGE SOLO UNA):
-       [Naturaleza, Cultura, Gastronomía, Aventura, Alojamiento, Compras, Urbano, Servicios]
-    
-    2. SCORE (1.0 a 5.0):
-       - Si parece publicidad engañosa o "Tourist Trap", castiga la nota.
-       - Si no hay nota, INFIERE una basada en la CALIDAD REAL. NUNCA 0.
-       
-    3. SUMMARY (Tu Veredicto):
-       - Di si vale la pena. Ej: "Dice ser barato pero es caro."
-       
-    4. ¿ES TRAMPA TURÍSTICA? (isTouristTrap):
-       - True/False.
-
-    OUTPUT JSON:
-    [{
-      "category": "Gastronomía", 
-      "placeName": "Restaurante X", 
-      "estimatedLocation": "Lima, Perú", 
-      "lat": -12.046, 
-      "lng": -77.042, 
-      "priceRange": "$50 USD", 
-      "summary": "Veredicto: Sobrevalorado.", 
-      "score": 2.5, 
-      "isTouristTrap": true,
-      "criticalVerdict": "Sobrevalorado"
-    }]
-    """
-    
+    video_file = None
     try:
+        video_file = genai.upload_file(path=video_path)
+        
+        # Espera activa con timeout de seguridad (máximo 60 seg)
+        attempts = 0
+        while video_file.state.name == "PROCESSING": 
+            time.sleep(2)
+            video_file = genai.get_file(video_file.name)
+            attempts += 1
+            if attempts > 30: # Si tarda más de 60s procesando, abortamos
+                raise Exception("Timeout procesando video en Gemini")
+        
+        if video_file.state.name == "FAILED":
+             raise Exception("Gemini falló al procesar el video")
+
+        model = genai.GenerativeModel(model_name="gemini-2.5-flash")
+        
+        prompt = """
+        Analiza este video de viajes.
+        ERES UN CRÍTICO DE VIAJES EXPERTO Y ESCÉPTICO.
+        1. CATEGORÍA (ELIGE SOLO UNA): [Naturaleza, Cultura, Gastronomía, Aventura, Alojamiento, Compras, Urbano, Servicios]
+        2. SCORE (1.0 a 5.0): Si no hay nota, INFIERE una. NUNCA 0.
+        3. SUMMARY: Veredicto honesto.
+        4. isTouristTrap: True/False.
+        OUTPUT JSON: [{"category": "...", "placeName": "...", "estimatedLocation": "...", "lat": 0, "lng": 0, "priceRange": "...", "summary": "...", "score": 4.0, "isTouristTrap": false, "criticalVerdict": "..."}]
+        """
+        
         response = model.generate_content([video_file, prompt], generation_config={"response_mime_type": "application/json"})
         raw_data = json.loads(response.text.replace("```json", "").replace("```", "").strip())
-    except: raw_data = []
-    
-    try: genai.delete_file(video_file.name)
-    except: pass
+        
+    except Exception as e:
+        print(f"❌ Error en Gemini: {str(e)}", flush=True)
+        raw_data = []
+        
+    finally:
+        # SIEMPRE intentamos borrar el archivo de la nube y local
+        try: 
+            if video_file: genai.delete_file(video_file.name)
+        except: pass
+        try:
+            # Borramos la carpeta temporal entera del video
+            if video_path: shutil.rmtree(os.path.dirname(video_path), ignore_errors=True)
+        except: pass
     
     if isinstance(raw_data, dict): raw_data = [raw_data]
     
@@ -200,18 +223,28 @@ def analyze_with_gemini(video_path):
         
     return final_results
 
-# --- RUTAS DE LA API ---
-
+# --- RUTAS ---
 @app.route('/analyze', methods=['POST'])
 def analyze_video_route():
     try:
         data = request.json
         url = data.get('url') if isinstance(data, dict) else data[0].get('url')
+        print(f"📡 Recibida petición para: {url}", flush=True)
+        
         video_path = download_video(url)
-        if not video_path: return jsonify({"error": "Error descarga"}), 500
+        if not video_path: 
+            return jsonify({"error": "No se pudo descargar el video. TikTok pudo haber bloqueado la conexión o el link es inválido."}), 500
+            
         results = analyze_with_gemini(video_path)
+        
+        if not results:
+             return jsonify({"error": "La IA vio el video pero no encontró lugares de viaje claros."}), 422
+             
         return jsonify(results) 
-    except Exception as e: return jsonify({"error": str(e)}), 500
+    except Exception as e: 
+        print(f"❌ Error Servidor: {str(e)}", flush=True)
+        traceback.print_exc() # Imprime el error real en la consola
+        return jsonify({"error": str(e)}), 500
     finally: gc.collect()
 
 @app.route('/api/chat', methods=['POST'])
@@ -226,20 +259,11 @@ def chat_guide():
         for p in raw_places:
             places_context.append(f"- {p.get('placeName')} ({p.get('category')}): {p.get('summary')} Score: {p.get('score')}")
         places_str = "\n".join(places_context[-50:])
-
         model = genai.GenerativeModel(model_name="gemini-2.5-flash")
-        prompt = f"""
-        Actúa como un Guía de Viajes SINCERO llamado "Bichibichi Guide".
-        TIENES ACCESO A ESTOS LUGARES:
-        {places_str}
-        USUARIO: "{user_message}"
-        MISIÓN: Responde con honestidad.
-        """
+        prompt = f"Actúa como un Guía 'Bichibichi'. LUGARES: {places_str}. USUARIO: {user_message}. MISIÓN: Responde con honestidad."
         response = model.generate_content(prompt)
         return jsonify({"reply": response.text})
-    except Exception as e:
-        print(f"Error chat: {e}")
-        return jsonify({"reply": "Error en el chat."})
+    except Exception as e: return jsonify({"reply": "Error en el chat."})
 
 @app.route('/api/history', methods=['POST', 'GET'])
 def handle_history():
@@ -251,95 +275,47 @@ def handle_history():
             clean = []
             for row in raw:
                 r = {k.lower().strip(): v for k, v in row.items()}
-                # Usamos la columna 12 (que puede llamarse realReviews)
                 clean.append({
-                    "id": str(r.get('id')), 
-                    "placeName": str(r.get('placename')), 
-                    "estimatedLocation": str(r.get('estimatedlocation')),
-                    "category": str(r.get('category')), 
-                    "score": r.get('score'), 
-                    "summary": str(r.get('summary')),
-                    "photoUrl": str(r.get('photourl')), 
-                    "mapsLink": str(r.get('mapslink')), 
-                    "isTouristTrap": str(r.get('istouristtrap')).lower() == 'true',
-                    "priceRange": str(r.get('pricerange')), 
-                    "lat": r.get('lat'), 
-                    "lng": r.get('lng')
+                    "id": str(r.get('id')), "placeName": str(r.get('placename')), "estimatedLocation": str(r.get('estimatedlocation')),
+                    "category": str(r.get('category')), "score": r.get('score'), "summary": str(r.get('summary')),
+                    "photoUrl": str(r.get('photourl')), "mapsLink": str(r.get('mapslink')), "isTouristTrap": str(r.get('istouristtrap')).lower() == 'true',
+                    "priceRange": str(r.get('pricerange')), "lat": r.get('lat'), "lng": r.get('lng')
                 })
             return jsonify(clean)
         except: return jsonify([])
 
-    # GUARDAR O ACTUALIZAR (OPCIÓN B)
     try: 
         new_items = request.json
         if not isinstance(new_items, list): new_items = [new_items]
         if not sheet: return jsonify({"status": "local"})
-        
         existing = sheet.get_all_records()
-        # Mapeamos nombre -> índice de fila (Google Sheets empieza en 2)
         name_map = {str(r.get('placeName', '')).strip().lower(): i+2 for i, r in enumerate(existing)}
-        
         rows_to_append = []
-        
         for item in new_items:
             key = str(item.get('placeName', '')).strip().lower()
             new_score = float(item.get('score', 0))
-            
             if key in name_map:
-                # --- LÓGICA DE FUSIÓN ---
                 row_idx = name_map[key]
-                print(f"🔄 Actualizando existente: {key} en fila {row_idx}", flush=True)
-                
-                # Leemos datos actuales de la memoria local para no gastar quota de lectura
-                # Recordar: existing es una lista 0-based. Fila 2 de Sheets es existing[0]
+                print(f"🔄 Actualizando: {key}", flush=True)
                 curr_record = existing[row_idx - 2]
-                
                 try: old_score = float(curr_record.get('score', 0) or 0)
                 except: old_score = 0.0
-                
-                # Usamos la columna 'realReviews' (la 12) como contador
-                # Ojo: chequea cómo se llama la columna en tu sheet (si es columna L)
-                # Si está vacía o es 0, asumimos que era 1
                 try: count = int(curr_record.get('realReviews', 0) or 1)
                 except: count = 1
                 if count == 0: count = 1
-                
-                # Cálculo de promedio ponderado
                 new_count = count + 1
                 final_avg = ((old_score * count) + new_score) / new_count
-                final_avg = round(final_avg, 1)
-                
-                # Actualizamos Score (Col 5) y Contador (Col 12)
-                # Nota: Esto es lento si son muchos, pero seguro para 1 a 1
-                sheet.update_cell(row_idx, 5, final_avg)
+                sheet.update_cell(row_idx, 5, round(final_avg, 1))
                 sheet.update_cell(row_idx, 12, new_count)
-                
             else:
-                # --- ES NUEVO: APPEND ---
                 rows_to_append.append([
-                    item.get('id'), 
-                    item.get('timestamp'), 
-                    item.get('placeName'), 
-                    item.get('category'), 
-                    item.get('score'), 
-                    item.get('estimatedLocation'), 
-                    item.get('summary'), 
-                    item.get('fileName'), 
-                    item.get('photoUrl'), 
-                    item.get('mapsLink'), 
-                    item.get('website') or "", 
-                    1, # Columna 12 (realReviews) inicia en 1
-                    item.get('isTouristTrap'), 
-                    item.get('priceRange'), 
-                    item.get('lat'), 
-                    item.get('lng')
+                    item.get('id'), item.get('timestamp'), item.get('placeName'), item.get('category'), item.get('score'), 
+                    item.get('estimatedLocation'), item.get('summary'), item.get('fileName'), item.get('photoUrl'), 
+                    item.get('mapsLink'), item.get('website') or "", 1, item.get('isTouristTrap'), item.get('priceRange'), item.get('lat'), item.get('lng')
                 ])
-                
         if rows_to_append: sheet.append_rows(rows_to_append)
         return jsonify({"status": "saved"})
-    except Exception as e: 
-        print(f"Error guardando: {e}")
-        return jsonify({"error": "save"}), 500
+    except Exception as e: return jsonify({"error": "save"}), 500
 
 @app.route('/', defaults={'path': ''})
 @app.route('/<path:path>')
