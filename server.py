@@ -23,7 +23,7 @@ load_dotenv()
 API_KEY = os.getenv("API_KEY")
 UNSPLASH_KEY = os.getenv("UNSPLASH_ACCESS_KEY") 
 
-print("🚀 INICIANDO: BICHIBICHI SERVER (MODO COOKIES VIP)...", flush=True)
+print("🚀 INICIANDO: BICHIBICHI SERVER (MODO FULL: ESPAÑOL + MAPA + COOKIES)...", flush=True)
 
 if not API_KEY: print("❌ FATAL: API_KEY no encontrada.", flush=True)
 else:
@@ -62,6 +62,7 @@ def verify_location_hybrid(place_name, location_hint, ai_lat=None, ai_lng=None):
     final_lng = ai_lng
     final_address = f"{place_name}, {location_hint}"
     
+    # Intentamos validar con Nominatim (OpenStreetMap) si la IA falló o dio 0
     if not final_lat or not final_lng or final_lat == 0:
         headers = { 'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 16_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.6 Mobile/15E148 Safari/604.1', 'Accept-Language': 'es-ES' }
         try:
@@ -96,11 +97,14 @@ def process_single_item(item):
             
         ai_lat = clean_coord(item.get("lat", 0))
         ai_lng = clean_coord(item.get("lng", 0))
-        geo_data = verify_location_hybrid(guessed_name, guessed_loc, ai_lat, ai_lng)
-        raw_cat = str(item.get("category") or "Otros")
         
+        # Verificación híbrida (IA + OpenStreetMap)
+        geo_data = verify_location_hybrid(guessed_name, guessed_loc, ai_lat, ai_lng)
+        
+        raw_cat = str(item.get("category") or "Otros")
         raw_summary = str(item.get("summary") or "")
         critical_verdict = str(item.get("criticalVerdict") or "")
+        
         final_summary = raw_summary
         if critical_verdict and critical_verdict not in raw_summary:
             final_summary = f"VEREDICTO: {critical_verdict}. {raw_summary}"
@@ -134,7 +138,6 @@ def download_video(url):
     temp_dir = tempfile.mkdtemp()
     tmpl = os.path.join(temp_dir, f'video_{int(time.time())}.%(ext)s')
     
-    # Configuración base
     opts = { 
         'format': 'worst[ext=mp4]', 
         'outtmpl': tmpl, 
@@ -142,38 +145,29 @@ def download_video(url):
         'no_warnings': True, 
         'nocheckcertificate': True,
         'socket_timeout': 30,
-        # Headers para parecer navegador de escritorio
         'http_headers': {
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
             'Referer': 'https://www.tiktok.com/',
         }
     }
 
-    # --- ZONA VIP: CARGA DE COOKIES ---
-    # Si existe el archivo cookies.txt, lo usamos para desbloquear TikTok
     if os.path.exists('cookies.txt'):
-        print("🍪 Cookies detectadas: Usando pase VIP para TikTok...", flush=True)
+        print("🍪 Cookies detectadas: Usando pase VIP...", flush=True)
         opts['cookiefile'] = 'cookies.txt'
     else:
-        print("⚠️ ALERTA: No se encontró cookies.txt. TikTok podría bloquear la descarga.", flush=True)
+        print("⚠️ ALERTA: No cookies.txt", flush=True)
     
     try:
-        with yt_dlp.YoutubeDL(opts) as ydl: 
-            ydl.download([url])
+        with yt_dlp.YoutubeDL(opts) as ydl: ydl.download([url])
         files = glob.glob(os.path.join(temp_dir, 'video_*'))
         gc.collect()
-        if files:
-            print(f"✅ Descarga exitosa: {files[0]}", flush=True)
-            return files[0]
-        else:
-            print("❌ Falló la descarga. (Posible bloqueo de IP si no hay cookies)", flush=True)
-            return None
+        return files[0] if files else None
     except Exception as e:
-        print(f"❌ Error CRÍTICO yt-dlp: {str(e)}", flush=True)
+        print(f"❌ Error yt-dlp: {str(e)}", flush=True)
         shutil.rmtree(temp_dir, ignore_errors=True)
         return None
 
-# --- ANÁLISIS CON GEMINI ---
+# --- ANÁLISIS CON GEMINI (PROMPT CORREGIDO: ESPAÑOL + LAT/LNG) ---
 def analyze_with_gemini(video_path):
     print(f"📤 Subiendo a Gemini...", flush=True)
     video_file = None
@@ -190,14 +184,32 @@ def analyze_with_gemini(video_path):
 
         model = genai.GenerativeModel(model_name="gemini-2.5-flash")
         
+        # --- AQUÍ ESTÁ EL PROMPT MAESTRO ---
         prompt = """
         Analiza este video de viajes.
-        ERES UN CRÍTICO DE VIAJES EXPERTO Y ESCÉPTICO.
-        1. CATEGORÍA (ELIGE SOLO UNA): [Naturaleza, Cultura, Gastronomía, Aventura, Alojamiento, Compras, Urbano, Servicios]
-        2. SCORE (1.0 a 5.0): Si no hay nota, INFIERE una. NUNCA 0.
-        3. SUMMARY: Veredicto honesto.
-        4. isTouristTrap: True/False.
-        OUTPUT JSON: [{"category": "...", "placeName": "...", "estimatedLocation": "...", "lat": 0, "lng": 0, "priceRange": "...", "summary": "...", "score": 4.0, "isTouristTrap": false, "criticalVerdict": "..."}]
+        ERES UN CRÍTICO DE VIAJES EXPERTO.
+        
+        INSTRUCCIONES CLAVE (RESPONDE SOLO EN ESPAÑOL):
+        
+        1. UBICACIÓN (CRÍTICO): Extrae coordenadas latitud (lat) y longitud (lng) aproximadas del lugar. NO PONGAS 0.
+        2. CATEGORÍA: [Naturaleza, Cultura, Gastronomía, Aventura, Alojamiento, Compras, Urbano, Servicios]
+        3. SCORE (1.0 a 5.0): Infiere nota si no existe.
+        4. SUMMARY: Veredicto honesto y detallado en ESPAÑOL.
+        5. isTouristTrap: True/False.
+        
+        OUTPUT JSON (Ejemplo): 
+        [{
+          "category": "Gastronomía", 
+          "placeName": "La Piojera", 
+          "estimatedLocation": "Santiago, Chile", 
+          "lat": -33.435, 
+          "lng": -70.651, 
+          "priceRange": "$10 USD", 
+          "summary": "Lugar clásico pero muy lleno...", 
+          "score": 4.2, 
+          "isTouristTrap": false, 
+          "criticalVerdict": "Auténtico pero caótico"
+        }]
         """
         
         response = model.generate_content([video_file, prompt], generation_config={"response_mime_type": "application/json"})
@@ -236,7 +248,7 @@ def analyze_video_route():
         
         video_path = download_video(url)
         if not video_path: 
-            return jsonify({"error": "TikTok bloqueó la conexión. ¿Subiste el archivo cookies.txt?"}), 500
+            return jsonify({"error": "Error de descarga (TikTok). Revisa cookies."}), 500
             
         results = analyze_with_gemini(video_path)
         if not results: return jsonify({"error": "No se encontraron lugares."}), 422
@@ -261,7 +273,7 @@ def chat_guide():
             places_context.append(f"- {p.get('placeName')} ({p.get('category')}): {p.get('summary')} Score: {p.get('score')}")
         places_str = "\n".join(places_context[-50:])
         model = genai.GenerativeModel(model_name="gemini-2.5-flash")
-        prompt = f"Guía Bichibichi. DATA: {places_str}. USER: {user_message}."
+        prompt = f"Guía Bichibichi (ESPAÑOL). DATA: {places_str}. USER: {user_message}."
         response = model.generate_content(prompt)
         return jsonify({"reply": response.text})
     except: return jsonify({"reply": "Error chat."})
