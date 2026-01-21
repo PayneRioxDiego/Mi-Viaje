@@ -23,7 +23,7 @@ load_dotenv()
 API_KEY = os.getenv("API_KEY")
 UNSPLASH_KEY = os.getenv("UNSPLASH_ACCESS_KEY") 
 
-print("🚀 INICIANDO: BICHIBICHI SERVER (MODO BLINDADO v3)...", flush=True)
+print("🚀 INICIANDO: BICHIBICHI SERVER (MODO COOKIES VIP)...", flush=True)
 
 if not API_KEY: print("❌ FATAL: API_KEY no encontrada.", flush=True)
 else:
@@ -62,9 +62,7 @@ def verify_location_hybrid(place_name, location_hint, ai_lat=None, ai_lng=None):
     final_lng = ai_lng
     final_address = f"{place_name}, {location_hint}"
     
-    # Intentamos validar con Nominatim (OpenStreetMap)
     if not final_lat or not final_lng or final_lat == 0:
-        # User-Agent de iPhone para no parecer robot
         headers = { 'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 16_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.6 Mobile/15E148 Safari/604.1', 'Accept-Language': 'es-ES' }
         try:
             time.sleep(1.0) 
@@ -130,26 +128,34 @@ def process_single_item(item):
         }
     except: return None
 
-# --- DESCARGA DE VIDEO (CAMUFLADA) ---
+# --- DESCARGA DE VIDEO (CON COOKIES) ---
 def download_video(url):
     print(f"⬇️ Intentando descargar: {url}", flush=True)
     temp_dir = tempfile.mkdtemp()
     tmpl = os.path.join(temp_dir, f'video_{int(time.time())}.%(ext)s')
     
-    # OPCIONES ANTI-BLOQUEO Y TIMEOUT
+    # Configuración base
     opts = { 
         'format': 'worst[ext=mp4]', 
         'outtmpl': tmpl, 
         'quiet': True, 
         'no_warnings': True, 
         'nocheckcertificate': True,
-        # Timeout para que no se quede pegado si TikTok no responde (20 segundos)
-        'socket_timeout': 20,
-        # Fingimos ser un iPhone para que TikTok no nos bloquee
+        'socket_timeout': 30,
+        # Headers para parecer navegador de escritorio
         'http_headers': {
-            'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 16_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.6 Mobile/15E148 Safari/604.1',
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            'Referer': 'https://www.tiktok.com/',
         }
     }
+
+    # --- ZONA VIP: CARGA DE COOKIES ---
+    # Si existe el archivo cookies.txt, lo usamos para desbloquear TikTok
+    if os.path.exists('cookies.txt'):
+        print("🍪 Cookies detectadas: Usando pase VIP para TikTok...", flush=True)
+        opts['cookiefile'] = 'cookies.txt'
+    else:
+        print("⚠️ ALERTA: No se encontró cookies.txt. TikTok podría bloquear la descarga.", flush=True)
     
     try:
         with yt_dlp.YoutubeDL(opts) as ydl: 
@@ -160,11 +166,10 @@ def download_video(url):
             print(f"✅ Descarga exitosa: {files[0]}", flush=True)
             return files[0]
         else:
-            print("❌ No se encontró el archivo descargado.", flush=True)
+            print("❌ Falló la descarga. (Posible bloqueo de IP si no hay cookies)", flush=True)
             return None
     except Exception as e:
-        print(f"❌ Error CRÍTICO en descarga: {str(e)}", flush=True)
-        # Limpiamos carpeta si falló
+        print(f"❌ Error CRÍTICO yt-dlp: {str(e)}", flush=True)
         shutil.rmtree(temp_dir, ignore_errors=True)
         return None
 
@@ -174,18 +179,14 @@ def analyze_with_gemini(video_path):
     video_file = None
     try:
         video_file = genai.upload_file(path=video_path)
-        
-        # Espera activa con timeout de seguridad (máximo 60 seg)
         attempts = 0
         while video_file.state.name == "PROCESSING": 
             time.sleep(2)
             video_file = genai.get_file(video_file.name)
             attempts += 1
-            if attempts > 30: # Si tarda más de 60s procesando, abortamos
-                raise Exception("Timeout procesando video en Gemini")
+            if attempts > 30: raise Exception("Timeout procesando video")
         
-        if video_file.state.name == "FAILED":
-             raise Exception("Gemini falló al procesar el video")
+        if video_file.state.name == "FAILED": raise Exception("Gemini falló")
 
         model = genai.GenerativeModel(model_name="gemini-2.5-flash")
         
@@ -207,12 +208,10 @@ def analyze_with_gemini(video_path):
         raw_data = []
         
     finally:
-        # SIEMPRE intentamos borrar el archivo de la nube y local
         try: 
             if video_file: genai.delete_file(video_file.name)
         except: pass
         try:
-            # Borramos la carpeta temporal entera del video
             if video_path: shutil.rmtree(os.path.dirname(video_path), ignore_errors=True)
         except: pass
     
@@ -231,26 +230,21 @@ def analyze_video_route():
     try:
         data = request.json
         raw_url = data.get('url') if isinstance(data, dict) else data[0].get('url')
+        url = raw_url.split('?')[0] # Limpieza de URL
         
-        # --- LIMPIEZA DE URL (CRÍTICO) ---
-        # Quitamos rastreadores (?) que provocan errores en TikTok
-        url = raw_url.split('?')[0]
-        
-        print(f"📡 Recibida petición para: {url} (Original: {raw_url})", flush=True)
+        print(f"📡 Recibida petición: {url}", flush=True)
         
         video_path = download_video(url)
         if not video_path: 
-            return jsonify({"error": "No se pudo descargar. TikTok bloqueó o el link es inválido."}), 500
+            return jsonify({"error": "TikTok bloqueó la conexión. ¿Subiste el archivo cookies.txt?"}), 500
             
         results = analyze_with_gemini(video_path)
-        
-        if not results:
-             return jsonify({"error": "La IA no encontró lugares claros en el video."}), 422
+        if not results: return jsonify({"error": "No se encontraron lugares."}), 422
              
         return jsonify(results) 
     except Exception as e: 
         print(f"❌ Error Servidor: {str(e)}", flush=True)
-        traceback.print_exc() # Imprime el error real en la consola
+        traceback.print_exc()
         return jsonify({"error": str(e)}), 500
     finally: gc.collect()
 
@@ -260,17 +254,17 @@ def chat_guide():
         data = request.json
         user_message = data.get('message', '')
         sheet = get_db_connection()
-        if not sheet: return jsonify({"reply": "No puedo acceder a tu base de datos."})
+        if not sheet: return jsonify({"reply": "Error DB."})
         raw_places = sheet.get_all_records()
         places_context = []
         for p in raw_places:
             places_context.append(f"- {p.get('placeName')} ({p.get('category')}): {p.get('summary')} Score: {p.get('score')}")
         places_str = "\n".join(places_context[-50:])
         model = genai.GenerativeModel(model_name="gemini-2.5-flash")
-        prompt = f"Actúa como un Guía 'Bichibichi'. LUGARES: {places_str}. USUARIO: {user_message}. MISIÓN: Responde con honestidad."
+        prompt = f"Guía Bichibichi. DATA: {places_str}. USER: {user_message}."
         response = model.generate_content(prompt)
         return jsonify({"reply": response.text})
-    except Exception as e: return jsonify({"reply": "Error en el chat."})
+    except: return jsonify({"reply": "Error chat."})
 
 @app.route('/api/history', methods=['POST', 'GET'])
 def handle_history():
@@ -322,7 +316,7 @@ def handle_history():
                 ])
         if rows_to_append: sheet.append_rows(rows_to_append)
         return jsonify({"status": "saved"})
-    except Exception as e: return jsonify({"error": "save"}), 500
+    except: return jsonify({"error": "save"}), 500
 
 @app.route('/', defaults={'path': ''})
 @app.route('/<path:path>')
