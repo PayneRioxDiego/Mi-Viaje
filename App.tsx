@@ -52,35 +52,19 @@ function App() {
     } catch (e) { console.error("Error cargando historial", e); }
   };
 
-  // --- LÓGICA DE FILTRADO INTELIGENTE ---
+  // --- LÓGICA DE FILTRADO INTELIGENTE (.includes) ---
   const filteredHistory = history.filter(item => {
-      // 1. Buscador de Texto
       const matchesSearch = (item.placeName || '').toLowerCase().includes(searchTerm.toLowerCase()) || 
                             (item.estimatedLocation || '').toLowerCase().includes(searchTerm.toLowerCase());
-      
-      // 2. Filtro de Categoría (INCLUSIVO)
-      // Usamos .includes() para que si el dato viejo es "Naturaleza/Educación", 
-      // el filtro "Naturaleza" lo capture igual.
       const matchesCategory = selectedCategory === 'Todas' || (item.category || '').includes(selectedCategory);
-
       return matchesSearch && matchesCategory;
   });
 
-  // --- LISTA OFICIAL DE LAS 8 CATEGORÍAS SAGRADAS ---
-  // Esto mantiene el menú limpio y ordenado, ignorando categorías basura antiguas
+  // --- LAS 8 CATEGORÍAS SAGRADAS ---
   const categoriesForFilter = [
-    'Todas', 
-    'Naturaleza', 
-    'Cultura', 
-    'Gastronomía', 
-    'Aventura', 
-    'Alojamiento', 
-    'Compras', 
-    'Urbano', 
-    'Servicios'
+    'Todas', 'Naturaleza', 'Cultura', 'Gastronomía', 'Aventura', 'Alojamiento', 'Compras', 'Urbano', 'Servicios'
   ];
 
-  // --- ANÁLISIS MANUAL ---
   const handleAnalyze = async () => {
     if (!url) return;
     setLoading(true); setError('');
@@ -93,11 +77,8 @@ function App() {
       if (data.error) throw new Error(data.error);
       const dataArray = Array.isArray(data) ? data : [data];
       setResults(dataArray);
-      
-      // Guardar automáticamente
       fetch('/api/history', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(dataArray) })
         .then(() => fetchHistory());
-        
     } catch (err: any) { setError(err.message || 'Error inesperado'); } 
     finally { setLoading(false); }
   };
@@ -125,7 +106,6 @@ function App() {
     return 'bg-amber-400 text-white shadow-amber-200';
   };
 
-  // Componente de Filtros
   const FilterBar = () => (
     <div className="bg-white p-3 rounded-2xl shadow-sm border border-slate-200 mb-6 flex flex-col sm:flex-row gap-3 items-center sticky top-20 z-10">
         <div className="relative flex-grow w-full">
@@ -146,7 +126,6 @@ function App() {
                 onChange={(e) => setSelectedCategory(e.target.value)}
                 className="w-full sm:w-48 py-2 px-3 rounded-xl bg-slate-50 border-transparent focus:bg-white focus:ring-2 focus:ring-indigo-500 text-sm"
             >
-                {/* Usamos la lista OFICIAL aquí */}
                 {categoriesForFilter.map(cat => <option key={cat} value={cat}>{cat}</option>)}
             </select>
         </div>
@@ -155,8 +134,7 @@ function App() {
 
   const TravelCard = ({ item }: { item: TravelAnalysis }) => {
     const safeSummary = item.summary || "";
-    const summaryParts = safeSummary.split('[🕵️‍♂️ Web]:');
-    const mainSummary = summaryParts[0] || "Sin resumen.";
+    // Ya no ocultamos nada, mostramos el resumen crudo completo
     return (
       <div className="group bg-white rounded-[2rem] overflow-hidden shadow-lg shadow-slate-200/50 hover:shadow-2xl transition-all duration-300 border border-slate-100 flex flex-col h-full">
         <div className="relative h-56 overflow-hidden shrink-0">
@@ -171,7 +149,15 @@ function App() {
         <div className="p-5 flex flex-col flex-grow">
           <h3 className="text-lg font-black text-slate-800 mb-1 leading-tight">{item.placeName || "Desconocido"}</h3>
           <div className="flex items-center text-slate-400 text-xs mb-3"> <MapPin className="h-3 w-3 mr-1" /> <span className="truncate">{item.estimatedLocation || "Ubicación desconocida"}</span> </div>
-          <div className="bg-slate-50 p-3 rounded-xl mb-4 flex-grow"> <p className="text-slate-600 text-xs leading-relaxed line-clamp-4">{mainSummary}</p> </div>
+          
+          {/* --- AQUÍ ESTÁ EL ARREGLO DEL TEXTO --- */}
+          <div className="bg-slate-50 p-3 rounded-xl mb-4 flex-grow border border-slate-100"> 
+             {/* Cambiado line-clamp-4 por h-24 overflow-y-auto (Scroll si es largo) */}
+             <p className="text-slate-600 text-xs leading-relaxed h-24 overflow-y-auto pr-1 scrollbar-thin scrollbar-thumb-slate-300">
+                {safeSummary}
+             </p> 
+          </div>
+          
           <div className="flex items-center justify-between pt-3 border-t border-slate-100 mt-auto">
             <div className="text-[10px] font-bold text-slate-300 uppercase tracking-widest"> {(!item.priceRange || item.priceRange === '??') ? 'N/A' : item.priceRange} </div>
             {item.mapsLink ? ( <a href={item.mapsLink} target="_blank" rel="noreferrer" className="flex items-center gap-1 px-3 py-1.5 bg-slate-900 text-white rounded-lg text-[10px] font-bold hover:bg-black transition-all shadow-md"> Ver Mapa <ChevronRight className="h-3 w-3" /> </a> ) : null}
