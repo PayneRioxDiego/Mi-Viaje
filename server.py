@@ -23,7 +23,7 @@ load_dotenv()
 API_KEY = os.getenv("API_KEY")
 UNSPLASH_KEY = os.getenv("UNSPLASH_ACCESS_KEY") 
 
-print("🚀 INICIANDO: BICHIBICHI SERVER (MODO FULL: ESPAÑOL + MAPA + COOKIES)...", flush=True)
+print("🚀 INICIANDO: BICHIBICHI SERVER (MODO MULTIMODAL: FOTOS + VIDEO)...", flush=True)
 
 if not API_KEY: print("❌ FATAL: API_KEY no encontrada.", flush=True)
 else:
@@ -62,7 +62,6 @@ def verify_location_hybrid(place_name, location_hint, ai_lat=None, ai_lng=None):
     final_lng = ai_lng
     final_address = f"{place_name}, {location_hint}"
     
-    # Intentamos validar con Nominatim (OpenStreetMap) si la IA falló o dio 0
     if not final_lat or not final_lng or final_lat == 0:
         headers = { 'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 16_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.6 Mobile/15E148 Safari/604.1', 'Accept-Language': 'es-ES' }
         try:
@@ -98,7 +97,6 @@ def process_single_item(item):
         ai_lat = clean_coord(item.get("lat", 0))
         ai_lng = clean_coord(item.get("lng", 0))
         
-        # Verificación híbrida (IA + OpenStreetMap)
         geo_data = verify_location_hybrid(guessed_name, guessed_loc, ai_lat, ai_lng)
         
         raw_cat = str(item.get("category") or "Otros")
@@ -132,14 +130,17 @@ def process_single_item(item):
         }
     except: return None
 
-# --- DESCARGA DE VIDEO (CON COOKIES) ---
+# --- DESCARGA DE VIDEO/FOTOS (MODO FLEXIBLE) ---
 def download_video(url):
     print(f"⬇️ Intentando descargar: {url}", flush=True)
     temp_dir = tempfile.mkdtemp()
-    tmpl = os.path.join(temp_dir, f'video_{int(time.time())}.%(ext)s')
+    
+    # Nombre base sin extensión (yt-dlp decidirá la extensión: mp4, jpg, mp3)
+    tmpl = os.path.join(temp_dir, f'media_{int(time.time())}.%(ext)s')
     
     opts = { 
-        'format': 'worst[ext=mp4]', 
+        # 'best' descarga la mejor calidad disponible, sea video O fotos
+        'format': 'best', 
         'outtmpl': tmpl, 
         'quiet': True, 
         'no_warnings': True, 
@@ -154,47 +155,67 @@ def download_video(url):
     if os.path.exists('cookies.txt'):
         print("🍪 Cookies detectadas: Usando pase VIP...", flush=True)
         opts['cookiefile'] = 'cookies.txt'
-    else:
-        print("⚠️ ALERTA: No cookies.txt", flush=True)
     
     try:
         with yt_dlp.YoutubeDL(opts) as ydl: ydl.download([url])
-        files = glob.glob(os.path.join(temp_dir, 'video_*'))
+        
+        # Buscamos TODO lo que haya descargado (jpg, mp4, mp3, webp...)
+        files = glob.glob(os.path.join(temp_dir, 'media_*'))
         gc.collect()
-        return files[0] if files else None
+        
+        if files:
+            print(f"✅ Se encontraron {len(files)} archivos (Video o Fotos).", flush=True)
+            # Devolvemos la LISTA completa, no solo el primero
+            return files
+        else:
+            print("❌ Falló la descarga.", flush=True)
+            return None
     except Exception as e:
         print(f"❌ Error yt-dlp: {str(e)}", flush=True)
         shutil.rmtree(temp_dir, ignore_errors=True)
         return None
 
-# --- ANÁLISIS CON GEMINI (PROMPT CORREGIDO: ESPAÑOL + LAT/LNG) ---
-def analyze_with_gemini(video_path):
-    print(f"📤 Subiendo a Gemini...", flush=True)
-    video_file = None
+# --- ANÁLISIS CON GEMINI (SOPORTE MULTI-ARCHIVO) ---
+def analyze_with_gemini(file_paths_list):
+    print(f"📤 Subiendo {len(file_paths_list)} archivos a Gemini...", flush=True)
+    
+    uploaded_files = []
+    
     try:
-        video_file = genai.upload_file(path=video_path)
-        attempts = 0
-        while video_file.state.name == "PROCESSING": 
-            time.sleep(2)
-            video_file = genai.get_file(video_file.name)
-            attempts += 1
-            if attempts > 30: raise Exception("Timeout procesando video")
-        
-        if video_file.state.name == "FAILED": raise Exception("Gemini falló")
+        # 1. Subir todos los archivos (imágenes, audios, videos)
+        for path in file_paths_list:
+            # Filtro simple: ignorar archivos que no sean media conocidos si hay basura
+            if not path.lower().endswith(('.mp4', '.jpg', '.jpeg', '.png', '.webp', '.mp3', '.m4a')):
+                continue
+                
+            f = genai.upload_file(path=path)
+            
+            # Esperar a que esté listo
+            attempts = 0
+            while f.state.name == "PROCESSING": 
+                time.sleep(1)
+                f = genai.get_file(f.name)
+                attempts += 1
+                if attempts > 30: break
+            
+            if f.state.name == "ACTIVE":
+                uploaded_files.append(f)
+
+        if not uploaded_files:
+            raise Exception("No se pudieron subir archivos válidos a Gemini.")
 
         model = genai.GenerativeModel(model_name="gemini-2.5-flash")
         
-        # --- AQUÍ ESTÁ EL PROMPT MAESTRO ---
+        # 2. Prompt Maestro
         prompt = """
-        Analiza este video de viajes.
+        Analiza estos archivos (video, o imágenes + audio) de un viaje.
         ERES UN CRÍTICO DE VIAJES EXPERTO.
         
         INSTRUCCIONES CLAVE (RESPONDE SOLO EN ESPAÑOL):
-        
-        1. UBICACIÓN (CRÍTICO): Extrae coordenadas latitud (lat) y longitud (lng) aproximadas del lugar. NO PONGAS 0.
+        1. UBICACIÓN (CRÍTICO): Extrae coordenadas latitud (lat) y longitud (lng) aproximadas. NO PONGAS 0.
         2. CATEGORÍA: [Naturaleza, Cultura, Gastronomía, Aventura, Alojamiento, Compras, Urbano, Servicios]
         3. SCORE (1.0 a 5.0): Infiere nota si no existe.
-        4. SUMMARY: Veredicto honesto y detallado en ESPAÑOL.
+        4. SUMMARY: Veredicto honesto y detallado en ESPAÑOL. Si son fotos de texto, LEE LA INFORMACIÓN.
         5. isTouristTrap: True/False.
         
         OUTPUT JSON (Ejemplo): 
@@ -212,7 +233,10 @@ def analyze_with_gemini(video_path):
         }]
         """
         
-        response = model.generate_content([video_file, prompt], generation_config={"response_mime_type": "application/json"})
+        # 3. Enviamos la LISTA de archivos + el prompt
+        content_payload = uploaded_files + [prompt]
+        
+        response = model.generate_content(content_payload, generation_config={"response_mime_type": "application/json"})
         raw_data = json.loads(response.text.replace("```json", "").replace("```", "").strip())
         
     except Exception as e:
@@ -220,11 +244,15 @@ def analyze_with_gemini(video_path):
         raw_data = []
         
     finally:
-        try: 
-            if video_file: genai.delete_file(video_file.name)
-        except: pass
+        # Limpieza: Borrar archivos de la nube de Gemini
+        for f in uploaded_files:
+            try: genai.delete_file(f.name)
+            except: pass
+        
+        # Limpieza: Borrar carpeta temporal local
         try:
-            if video_path: shutil.rmtree(os.path.dirname(video_path), ignore_errors=True)
+            if file_paths_list and len(file_paths_list) > 0:
+                shutil.rmtree(os.path.dirname(file_paths_list[0]), ignore_errors=True)
         except: pass
     
     if isinstance(raw_data, dict): raw_data = [raw_data]
@@ -242,15 +270,18 @@ def analyze_video_route():
     try:
         data = request.json
         raw_url = data.get('url') if isinstance(data, dict) else data[0].get('url')
-        url = raw_url.split('?')[0] # Limpieza de URL
+        url = raw_url.split('?')[0]
         
         print(f"📡 Recibida petición: {url}", flush=True)
         
-        video_path = download_video(url)
-        if not video_path: 
+        # Ahora recibimos una LISTA de archivos (video o fotos)
+        files_list = download_video(url)
+        
+        if not files_list: 
             return jsonify({"error": "Error de descarga (TikTok). Revisa cookies."}), 500
             
-        results = analyze_with_gemini(video_path)
+        results = analyze_with_gemini(files_list)
+        
         if not results: return jsonify({"error": "No se encontraron lugares."}), 422
              
         return jsonify(results) 
