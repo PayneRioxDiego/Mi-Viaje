@@ -62,7 +62,9 @@ def verify_location_hybrid(place_name, location_hint, ai_lat=None, ai_lng=None):
     final_lng = ai_lng
     final_address = f"{place_name}, {location_hint}"
     
+    # Intentamos validar con Nominatim (OpenStreetMap)
     if not final_lat or not final_lng or final_lat == 0:
+        # User-Agent de iPhone para no parecer robot
         headers = { 'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 16_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.6 Mobile/15E148 Safari/604.1', 'Accept-Language': 'es-ES' }
         try:
             time.sleep(1.0) 
@@ -128,7 +130,7 @@ def process_single_item(item):
         }
     except: return None
 
-# --- DESCARGA DE VIDEO (MEJORADA) ---
+# --- DESCARGA DE VIDEO (CAMUFLADA) ---
 def download_video(url):
     print(f"⬇️ Intentando descargar: {url}", flush=True)
     temp_dir = tempfile.mkdtemp()
@@ -141,8 +143,8 @@ def download_video(url):
         'quiet': True, 
         'no_warnings': True, 
         'nocheckcertificate': True,
-        # Timeout para que no se quede pegado si TikTok no responde
-        'socket_timeout': 15,
+        # Timeout para que no se quede pegado si TikTok no responde (20 segundos)
+        'socket_timeout': 20,
         # Fingimos ser un iPhone para que TikTok no nos bloquee
         'http_headers': {
             'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 16_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.6 Mobile/15E148 Safari/604.1',
@@ -228,17 +230,22 @@ def analyze_with_gemini(video_path):
 def analyze_video_route():
     try:
         data = request.json
-        url = data.get('url') if isinstance(data, dict) else data[0].get('url')
-        print(f"📡 Recibida petición para: {url}", flush=True)
+        raw_url = data.get('url') if isinstance(data, dict) else data[0].get('url')
+        
+        # --- LIMPIEZA DE URL (CRÍTICO) ---
+        # Quitamos rastreadores (?) que provocan errores en TikTok
+        url = raw_url.split('?')[0]
+        
+        print(f"📡 Recibida petición para: {url} (Original: {raw_url})", flush=True)
         
         video_path = download_video(url)
         if not video_path: 
-            return jsonify({"error": "No se pudo descargar el video. TikTok pudo haber bloqueado la conexión o el link es inválido."}), 500
+            return jsonify({"error": "No se pudo descargar. TikTok bloqueó o el link es inválido."}), 500
             
         results = analyze_with_gemini(video_path)
         
         if not results:
-             return jsonify({"error": "La IA vio el video pero no encontró lugares de viaje claros."}), 422
+             return jsonify({"error": "La IA no encontró lugares claros en el video."}), 422
              
         return jsonify(results) 
     except Exception as e: 
