@@ -23,7 +23,7 @@ load_dotenv()
 API_KEY = os.getenv("API_KEY")
 UNSPLASH_KEY = os.getenv("UNSPLASH_ACCESS_KEY") 
 
-print("🚀 INICIANDO: BICHIBICHI SERVER (MODO MULTIMODAL: FOTOS + VIDEO)...", flush=True)
+print("🚀 INICIANDO: BICHIBICHI SERVER (MODO FOTOS FIX)...", flush=True)
 
 if not API_KEY: print("❌ FATAL: API_KEY no encontrada.", flush=True)
 else:
@@ -135,12 +135,10 @@ def download_video(url):
     print(f"⬇️ Intentando descargar: {url}", flush=True)
     temp_dir = tempfile.mkdtemp()
     
-    # Nombre base sin extensión (yt-dlp decidirá la extensión: mp4, jpg, mp3)
     tmpl = os.path.join(temp_dir, f'media_{int(time.time())}.%(ext)s')
     
     opts = { 
-        # 'best' descarga la mejor calidad disponible, sea video O fotos
-        'format': 'best', 
+        'format': 'best', # Descarga lo mejor (sea video o fotos)
         'outtmpl': tmpl, 
         'quiet': True, 
         'no_warnings': True, 
@@ -159,13 +157,11 @@ def download_video(url):
     try:
         with yt_dlp.YoutubeDL(opts) as ydl: ydl.download([url])
         
-        # Buscamos TODO lo que haya descargado (jpg, mp4, mp3, webp...)
         files = glob.glob(os.path.join(temp_dir, 'media_*'))
         gc.collect()
         
         if files:
-            print(f"✅ Se encontraron {len(files)} archivos (Video o Fotos).", flush=True)
-            # Devolvemos la LISTA completa, no solo el primero
+            print(f"✅ Se encontraron {len(files)} archivos.", flush=True)
             return files
         else:
             print("❌ Falló la descarga.", flush=True)
@@ -182,15 +178,12 @@ def analyze_with_gemini(file_paths_list):
     uploaded_files = []
     
     try:
-        # 1. Subir todos los archivos (imágenes, audios, videos)
         for path in file_paths_list:
-            # Filtro simple: ignorar archivos que no sean media conocidos si hay basura
             if not path.lower().endswith(('.mp4', '.jpg', '.jpeg', '.png', '.webp', '.mp3', '.m4a')):
                 continue
                 
             f = genai.upload_file(path=path)
             
-            # Esperar a que esté listo
             attempts = 0
             while f.state.name == "PROCESSING": 
                 time.sleep(1)
@@ -206,7 +199,6 @@ def analyze_with_gemini(file_paths_list):
 
         model = genai.GenerativeModel(model_name="gemini-2.5-flash")
         
-        # 2. Prompt Maestro
         prompt = """
         Analiza estos archivos (video, o imágenes + audio) de un viaje.
         ERES UN CRÍTICO DE VIAJES EXPERTO.
@@ -233,7 +225,6 @@ def analyze_with_gemini(file_paths_list):
         }]
         """
         
-        # 3. Enviamos la LISTA de archivos + el prompt
         content_payload = uploaded_files + [prompt]
         
         response = model.generate_content(content_payload, generation_config={"response_mime_type": "application/json"})
@@ -244,12 +235,9 @@ def analyze_with_gemini(file_paths_list):
         raw_data = []
         
     finally:
-        # Limpieza: Borrar archivos de la nube de Gemini
         for f in uploaded_files:
             try: genai.delete_file(f.name)
             except: pass
-        
-        # Limpieza: Borrar carpeta temporal local
         try:
             if file_paths_list and len(file_paths_list) > 0:
                 shutil.rmtree(os.path.dirname(file_paths_list[0]), ignore_errors=True)
@@ -270,11 +258,18 @@ def analyze_video_route():
     try:
         data = request.json
         raw_url = data.get('url') if isinstance(data, dict) else data[0].get('url')
+        
+        # Limpieza inicial
         url = raw_url.split('?')[0]
+        
+        # --- FIX PARA FOTOS DE TIKTOK ---
+        # yt-dlp a veces falla con /photo/, lo disfrazamos de /video/
+        if '/photo/' in url:
+            print("📸 Detectado enlace de fotos. Aplicando disfraz de video...", flush=True)
+            url = url.replace('/photo/', '/video/')
         
         print(f"📡 Recibida petición: {url}", flush=True)
         
-        # Ahora recibimos una LISTA de archivos (video o fotos)
         files_list = download_video(url)
         
         if not files_list: 
