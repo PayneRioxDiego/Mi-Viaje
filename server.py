@@ -24,7 +24,7 @@ load_dotenv()
 API_KEY = os.getenv("API_KEY")
 UNSPLASH_KEY = os.getenv("UNSPLASH_ACCESS_KEY") 
 
-print("🚀 INICIANDO: BICHIBICHI SERVER (MODO SMART RETRY v4.3)...", flush=True)
+print("🚀 INICIANDO: BICHIBICHI SERVER (v5.0 - TANQUE DE GUERRA)...", flush=True)
 
 if not API_KEY: print("❌ FATAL: API_KEY no encontrada.", flush=True)
 else:
@@ -131,58 +131,90 @@ def process_single_item(item):
         }
     except: return None
 
-# --- DESCARGA DE VIDEO (SMART RETRY) ---
+# --- DESCARGA ROBUSTA (VIDEOS Y FOTOS) ---
 def download_video(url):
     print(f"⬇️ Intentando descargar: {url}", flush=True)
     temp_dir = tempfile.mkdtemp()
+    
+    # IMPORTANTE: No usamos extensión fija para que acepte jpg, mp3, mp4, etc.
     tmpl = os.path.join(temp_dir, f'media_{int(time.time())}.%(ext)s')
     
-    # 1. INTENTO CON COOKIES (Si existen)
+    # Configuración base común
+    opts_base = { 
+        'format': 'best', # Intenta bajar la mejor calidad de lo que sea
+        'outtmpl': tmpl, 
+        'quiet': True, 
+        'no_warnings': True, 
+        'nocheckcertificate': True,
+        'socket_timeout': 30,
+        'ignoreerrors': True, # Si una foto falla, que siga con las otras
+    }
+
+    # 1. INTENTO CON COOKIES
     if os.path.exists('cookies.txt'):
         print("🍪 Intento 1: Usando Cookies...", flush=True)
-        opts_cookies = { 
-            'format': 'best', 'outtmpl': tmpl, 'quiet': True, 'no_warnings': True, 'nocheckcertificate': True, 'socket_timeout': 30,
-            'cookiefile': 'cookies.txt',
-            'http_headers': {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'}
-        }
+        opts_cookies = opts_base.copy()
+        opts_cookies['cookiefile'] = 'cookies.txt'
+        opts_cookies['http_headers'] = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'}
+        
         try:
             with yt_dlp.YoutubeDL(opts_cookies) as ydl: ydl.download([url])
             files = glob.glob(os.path.join(temp_dir, 'media_*'))
             if files: return files
         except Exception as e:
-            print(f"⚠️ Intento 1 falló (posible 403 Cookies): {e}", flush=True)
+            print(f"⚠️ Intento 1 falló (403/Cookies): {e}", flush=True)
     
-    # 2. INTENTO SIN COOKIES (Modo iPhone / Fallback)
-    # Si falló lo anterior o no hay cookies, probamos "limpio" como móvil
-    print("📱 Intento 2: Modo iPhone (Sin Cookies)...", flush=True)
-    opts_mobile = { 
-        'format': 'best', 'outtmpl': tmpl, 'quiet': True, 'no_warnings': True, 'nocheckcertificate': True, 'socket_timeout': 30,
-        'http_headers': {'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 16_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.6 Mobile/15E148 Safari/604.1'}
-    }
+    # Pausa de seguridad para evitar saturar
+    time.sleep(2)
+
+    # 2. INTENTO "DESKTOP" LIMPIO (Sin cookies, pero como PC)
+    # Cambiamos a User-Agent de PC porque el de iPhone a veces falla con galerías de fotos
+    print("💻 Intento 2: Modo Desktop Limpio (Fallback)...", flush=True)
+    opts_desktop = opts_base.copy()
+    opts_desktop['http_headers'] = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36'}
     
     try:
-        with yt_dlp.YoutubeDL(opts_mobile) as ydl: ydl.download([url])
+        with yt_dlp.YoutubeDL(opts_desktop) as ydl: ydl.download([url])
         files = glob.glob(os.path.join(temp_dir, 'media_*'))
         gc.collect()
         if files: return files
     except Exception as e:
         print(f"❌ Intento 2 falló: {e}", flush=True)
 
-    # Si todo falla, limpiamos
+    # Limpieza si todo falla
     shutil.rmtree(temp_dir, ignore_errors=True)
     return None
 
-# --- ANÁLISIS CON GEMINI ---
-def analyze_with_gemini(file_paths_list):
+# --- FUNCIÓN DE ANÁLISIS CON AUTO-REINTENTO (ANTI 429) ---
+def analyze_with_gemini_retry(file_paths_list):
+    max_retries = 1
+    for attempt in range(max_retries + 1):
+        try:
+            return analyze_with_gemini_core(file_paths_list)
+        except Exception as e:
+            err_str = str(e)
+            # Si el error es de cuota (429), esperamos y reintentamos
+            if "429" in err_str or "quota" in err_str.lower():
+                if attempt < max_retries:
+                    print(f"⏳ Límite de velocidad alcanzado. Esperando 30 segundos...", flush=True)
+                    time.sleep(30)
+                    print(f"🔄 Reintentando ahora...", flush=True)
+                    continue
+            # Si es otro error, lanzamos
+            raise e
+
+def analyze_with_gemini_core(file_paths_list):
     print(f"📤 Subiendo {len(file_paths_list)} archivos a Gemini...", flush=True)
     uploaded_files = []
     
     try:
         for path in file_paths_list:
+            # Filtro estricto de extensiones permitidas
             if not path.lower().endswith(('.mp4', '.jpg', '.jpeg', '.png', '.webp', '.mp3', '.m4a', '.wav')): continue
 
+            # Detección y corrección de MIME TYPES
             mime_type, _ = mimetypes.guess_type(path)
-            if not mime_type: # Fallback manual
+            if not mime_type:
                 ext = path.lower().split('.')[-1]
                 if ext in ['jpg', 'jpeg']: mime_type = 'image/jpeg'
                 elif ext == 'png': mime_type = 'image/png'
@@ -193,6 +225,8 @@ def analyze_with_gemini(file_paths_list):
                 else: mime_type = 'application/octet-stream'
             
             f = genai.upload_file(path=path, mime_type=mime_type)
+            
+            # Espera activa
             attempts = 0
             while f.state.name == "PROCESSING": 
                 time.sleep(1)
@@ -202,7 +236,7 @@ def analyze_with_gemini(file_paths_list):
             
             if f.state.name == "ACTIVE": uploaded_files.append(f)
 
-        if not uploaded_files: raise Exception("Error subiendo archivos a Gemini.")
+        if not uploaded_files: raise Exception("No se pudieron subir archivos válidos.")
 
         model = genai.GenerativeModel(model_name="gemini-2.5-flash")
         
@@ -222,24 +256,19 @@ def analyze_with_gemini(file_paths_list):
         response = model.generate_content(content_payload, generation_config={"response_mime_type": "application/json"})
         raw_data = json.loads(response.text.replace("```json", "").replace("```", "").strip())
         
-    except Exception as e:
-        print(f"❌ Error Gemini: {str(e)}", flush=True)
-        raw_data = []
-        
-    finally:
+        # Limpieza de archivos en la nube
         for f in uploaded_files:
             try: genai.delete_file(f.name)
             except: pass
-        try:
-            if file_paths_list: shutil.rmtree(os.path.dirname(file_paths_list[0]), ignore_errors=True)
-        except: pass
-    
-    if isinstance(raw_data, dict): raw_data = [raw_data]
-    final_results = []
-    with ThreadPoolExecutor(max_workers=5) as executor:
-        results = list(executor.map(process_single_item, raw_data))
-        final_results = [r for r in results if r is not None]
-    return final_results
+            
+        return raw_data
+        
+    except Exception as e:
+        # Limpieza de emergencia
+        for f in uploaded_files:
+            try: genai.delete_file(f.name)
+            except: pass
+        raise e
 
 # --- RUTAS ---
 @app.route('/analyze', methods=['POST'])
@@ -247,20 +276,34 @@ def analyze_video_route():
     try:
         data = request.json
         raw_url = data.get('url') if isinstance(data, dict) else data[0].get('url')
-        url = raw_url.split('?')[0] # Limpieza básica
+        url = raw_url.split('?')[0] # Limpieza
         
-        # Disfraz para fotos
+        # Mantenemos el fix de URL para fotos, suele ayudar
         if '/photo/' in url: url = url.replace('/photo/', '/video/')
         
         print(f"📡 Recibida petición: {url}", flush=True)
         
         files_list = download_video(url)
-        if not files_list: return jsonify({"error": "Error descarga. Intenta de nuevo (TikTok bloqueo)."}), 500
-            
-        results = analyze_with_gemini(files_list)
-        if not results: return jsonify({"error": "No se encontraron lugares."}), 422
+        if not files_list: return jsonify({"error": "No se pudo descargar el contenido."}), 500
+        
+        # Usamos la versión con reintento automático
+        results_raw = analyze_with_gemini_retry(files_list)
+        
+        # Procesamos resultados (hilos para geolocalización)
+        if isinstance(results_raw, dict): results_raw = [results_raw]
+        final_results = []
+        with ThreadPoolExecutor(max_workers=5) as executor:
+            results = list(executor.map(process_single_item, results_raw))
+            final_results = [r for r in results if r is not None]
+        
+        # Limpieza local final
+        try: shutil.rmtree(os.path.dirname(files_list[0]), ignore_errors=True)
+        except: pass
+
+        if not final_results: return jsonify({"error": "No se encontraron lugares."}), 422
              
-        return jsonify(results) 
+        return jsonify(final_results) 
+        
     except Exception as e: 
         print(f"❌ Error Servidor: {str(e)}", flush=True)
         traceback.print_exc()
