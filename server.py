@@ -8,7 +8,7 @@ import requests
 import gc
 import traceback
 import shutil
-import mimetypes # <--- IMPORTANTE: Necesario para identificar archivos
+import mimetypes
 from flask import Flask, request, jsonify, send_from_directory
 from flask_cors import CORS
 import yt_dlp
@@ -24,7 +24,7 @@ load_dotenv()
 API_KEY = os.getenv("API_KEY")
 UNSPLASH_KEY = os.getenv("UNSPLASH_ACCESS_KEY") 
 
-print("🚀 INICIANDO: BICHIBICHI SERVER (MODO MIME FIX v4.2)...", flush=True)
+print("🚀 INICIANDO: BICHIBICHI SERVER (MODO SMART RETRY v4.3)...", flush=True)
 
 if not API_KEY: print("❌ FATAL: API_KEY no encontrada.", flush=True)
 else:
@@ -131,62 +131,58 @@ def process_single_item(item):
         }
     except: return None
 
-# --- DESCARGA DE VIDEO/FOTOS ---
+# --- DESCARGA DE VIDEO (SMART RETRY) ---
 def download_video(url):
     print(f"⬇️ Intentando descargar: {url}", flush=True)
     temp_dir = tempfile.mkdtemp()
-    
     tmpl = os.path.join(temp_dir, f'media_{int(time.time())}.%(ext)s')
     
-    opts = { 
-        'format': 'best', 
-        'outtmpl': tmpl, 
-        'quiet': True, 
-        'no_warnings': True, 
-        'nocheckcertificate': True,
-        'socket_timeout': 30,
-        'http_headers': {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-            'Referer': 'https://www.tiktok.com/',
-        }
-    }
-
+    # 1. INTENTO CON COOKIES (Si existen)
     if os.path.exists('cookies.txt'):
-        print("🍪 Cookies detectadas: Usando pase VIP...", flush=True)
-        opts['cookiefile'] = 'cookies.txt'
+        print("🍪 Intento 1: Usando Cookies...", flush=True)
+        opts_cookies = { 
+            'format': 'best', 'outtmpl': tmpl, 'quiet': True, 'no_warnings': True, 'nocheckcertificate': True, 'socket_timeout': 30,
+            'cookiefile': 'cookies.txt',
+            'http_headers': {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'}
+        }
+        try:
+            with yt_dlp.YoutubeDL(opts_cookies) as ydl: ydl.download([url])
+            files = glob.glob(os.path.join(temp_dir, 'media_*'))
+            if files: return files
+        except Exception as e:
+            print(f"⚠️ Intento 1 falló (posible 403 Cookies): {e}", flush=True)
+    
+    # 2. INTENTO SIN COOKIES (Modo iPhone / Fallback)
+    # Si falló lo anterior o no hay cookies, probamos "limpio" como móvil
+    print("📱 Intento 2: Modo iPhone (Sin Cookies)...", flush=True)
+    opts_mobile = { 
+        'format': 'best', 'outtmpl': tmpl, 'quiet': True, 'no_warnings': True, 'nocheckcertificate': True, 'socket_timeout': 30,
+        'http_headers': {'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 16_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.6 Mobile/15E148 Safari/604.1'}
+    }
     
     try:
-        with yt_dlp.YoutubeDL(opts) as ydl: ydl.download([url])
+        with yt_dlp.YoutubeDL(opts_mobile) as ydl: ydl.download([url])
         files = glob.glob(os.path.join(temp_dir, 'media_*'))
         gc.collect()
-        if files:
-            print(f"✅ Se encontraron {len(files)} archivos.", flush=True)
-            return files
-        else:
-            print("❌ Falló la descarga.", flush=True)
-            return None
+        if files: return files
     except Exception as e:
-        print(f"❌ Error yt-dlp: {str(e)}", flush=True)
-        shutil.rmtree(temp_dir, ignore_errors=True)
-        return None
+        print(f"❌ Intento 2 falló: {e}", flush=True)
 
-# --- ANÁLISIS CON GEMINI (MIME TYPES CORREGIDOS) ---
+    # Si todo falla, limpiamos
+    shutil.rmtree(temp_dir, ignore_errors=True)
+    return None
+
+# --- ANÁLISIS CON GEMINI ---
 def analyze_with_gemini(file_paths_list):
     print(f"📤 Subiendo {len(file_paths_list)} archivos a Gemini...", flush=True)
-    
     uploaded_files = []
     
     try:
         for path in file_paths_list:
-            # Filtro básico de extensiones
-            if not path.lower().endswith(('.mp4', '.jpg', '.jpeg', '.png', '.webp', '.mp3', '.m4a', '.wav')):
-                continue
+            if not path.lower().endswith(('.mp4', '.jpg', '.jpeg', '.png', '.webp', '.mp3', '.m4a', '.wav')): continue
 
-            # --- DETECCIÓN DE MIME TYPE (ESTO ARREGLA EL ERROR 422) ---
             mime_type, _ = mimetypes.guess_type(path)
-            
-            # Si mimetypes falla, lo forzamos manualmente
-            if not mime_type:
+            if not mime_type: # Fallback manual
                 ext = path.lower().split('.')[-1]
                 if ext in ['jpg', 'jpeg']: mime_type = 'image/jpeg'
                 elif ext == 'png': mime_type = 'image/png'
@@ -194,14 +190,9 @@ def analyze_with_gemini(file_paths_list):
                 elif ext == 'mp4': mime_type = 'video/mp4'
                 elif ext == 'mp3': mime_type = 'audio/mpeg'
                 elif ext == 'm4a': mime_type = 'audio/mp4'
-                elif ext == 'wav': mime_type = 'audio/wav'
-                else: mime_type = 'application/octet-stream' # Fallback
+                else: mime_type = 'application/octet-stream'
             
-            print(f"   📄 Subiendo: {os.path.basename(path)} como {mime_type}", flush=True)
-            
-            # Subimos con el mime_type explícito
             f = genai.upload_file(path=path, mime_type=mime_type)
-            
             attempts = 0
             while f.state.name == "PROCESSING": 
                 time.sleep(1)
@@ -209,49 +200,30 @@ def analyze_with_gemini(file_paths_list):
                 attempts += 1
                 if attempts > 30: break
             
-            if f.state.name == "ACTIVE":
-                uploaded_files.append(f)
-            else:
-                print(f"   ⚠️ Archivo falló o sigue procesando: {f.state.name}", flush=True)
+            if f.state.name == "ACTIVE": uploaded_files.append(f)
 
-        if not uploaded_files:
-            raise Exception("No se pudieron subir archivos válidos a Gemini.")
+        if not uploaded_files: raise Exception("Error subiendo archivos a Gemini.")
 
         model = genai.GenerativeModel(model_name="gemini-2.5-flash")
         
         prompt = """
         Analiza estos archivos (video, o imágenes + audio) de un viaje.
         ERES UN CRÍTICO DE VIAJES EXPERTO.
-        
         INSTRUCCIONES CLAVE (RESPONDE SOLO EN ESPAÑOL):
         1. UBICACIÓN (CRÍTICO): Extrae coordenadas latitud (lat) y longitud (lng) aproximadas. NO PONGAS 0.
         2. CATEGORÍA: [Naturaleza, Cultura, Gastronomía, Aventura, Alojamiento, Compras, Urbano, Servicios]
         3. SCORE (1.0 a 5.0): Infiere nota si no existe.
         4. SUMMARY: Veredicto honesto y detallado en ESPAÑOL. Si son fotos de texto, LEE LA INFORMACIÓN.
         5. isTouristTrap: True/False.
-        
-        OUTPUT JSON (Ejemplo): 
-        [{
-          "category": "Gastronomía", 
-          "placeName": "La Piojera", 
-          "estimatedLocation": "Santiago, Chile", 
-          "lat": -33.435, 
-          "lng": -70.651, 
-          "priceRange": "$10 USD", 
-          "summary": "Lugar clásico pero muy lleno...", 
-          "score": 4.2, 
-          "isTouristTrap": false, 
-          "criticalVerdict": "Auténtico pero caótico"
-        }]
+        OUTPUT JSON: [{"category": "...", "placeName": "...", "estimatedLocation": "...", "lat": -33.45, "lng": -70.66, "priceRange": "...", "summary": "...", "score": 4.0, "isTouristTrap": false, "criticalVerdict": "..."}]
         """
         
         content_payload = uploaded_files + [prompt]
-        
         response = model.generate_content(content_payload, generation_config={"response_mime_type": "application/json"})
         raw_data = json.loads(response.text.replace("```json", "").replace("```", "").strip())
         
     except Exception as e:
-        print(f"❌ Error en Gemini: {str(e)}", flush=True)
+        print(f"❌ Error Gemini: {str(e)}", flush=True)
         raw_data = []
         
     finally:
@@ -259,17 +231,14 @@ def analyze_with_gemini(file_paths_list):
             try: genai.delete_file(f.name)
             except: pass
         try:
-            if file_paths_list and len(file_paths_list) > 0:
-                shutil.rmtree(os.path.dirname(file_paths_list[0]), ignore_errors=True)
+            if file_paths_list: shutil.rmtree(os.path.dirname(file_paths_list[0]), ignore_errors=True)
         except: pass
     
     if isinstance(raw_data, dict): raw_data = [raw_data]
-    
     final_results = []
     with ThreadPoolExecutor(max_workers=5) as executor:
         results = list(executor.map(process_single_item, raw_data))
         final_results = [r for r in results if r is not None]
-        
     return final_results
 
 # --- RUTAS ---
@@ -278,21 +247,17 @@ def analyze_video_route():
     try:
         data = request.json
         raw_url = data.get('url') if isinstance(data, dict) else data[0].get('url')
-        url = raw_url.split('?')[0]
+        url = raw_url.split('?')[0] # Limpieza básica
         
-        # Disfraz para fotos de TikTok
-        if '/photo/' in url:
-            url = url.replace('/photo/', '/video/')
+        # Disfraz para fotos
+        if '/photo/' in url: url = url.replace('/photo/', '/video/')
         
         print(f"📡 Recibida petición: {url}", flush=True)
         
         files_list = download_video(url)
-        
-        if not files_list: 
-            return jsonify({"error": "Error de descarga (TikTok). Revisa cookies."}), 500
+        if not files_list: return jsonify({"error": "Error descarga. Intenta de nuevo (TikTok bloqueo)."}), 500
             
         results = analyze_with_gemini(files_list)
-        
         if not results: return jsonify({"error": "No se encontraron lugares."}), 422
              
         return jsonify(results) 
