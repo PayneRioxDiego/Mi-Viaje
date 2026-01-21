@@ -8,6 +8,7 @@ import requests
 import gc
 import traceback
 import shutil
+import mimetypes # <--- IMPORTANTE: Necesario para identificar archivos
 from flask import Flask, request, jsonify, send_from_directory
 from flask_cors import CORS
 import yt_dlp
@@ -23,7 +24,7 @@ load_dotenv()
 API_KEY = os.getenv("API_KEY")
 UNSPLASH_KEY = os.getenv("UNSPLASH_ACCESS_KEY") 
 
-print("🚀 INICIANDO: BICHIBICHI SERVER (MODO FOTOS FIX)...", flush=True)
+print("🚀 INICIANDO: BICHIBICHI SERVER (MODO MIME FIX v4.2)...", flush=True)
 
 if not API_KEY: print("❌ FATAL: API_KEY no encontrada.", flush=True)
 else:
@@ -130,7 +131,7 @@ def process_single_item(item):
         }
     except: return None
 
-# --- DESCARGA DE VIDEO/FOTOS (MODO FLEXIBLE) ---
+# --- DESCARGA DE VIDEO/FOTOS ---
 def download_video(url):
     print(f"⬇️ Intentando descargar: {url}", flush=True)
     temp_dir = tempfile.mkdtemp()
@@ -138,7 +139,7 @@ def download_video(url):
     tmpl = os.path.join(temp_dir, f'media_{int(time.time())}.%(ext)s')
     
     opts = { 
-        'format': 'best', # Descarga lo mejor (sea video o fotos)
+        'format': 'best', 
         'outtmpl': tmpl, 
         'quiet': True, 
         'no_warnings': True, 
@@ -156,10 +157,8 @@ def download_video(url):
     
     try:
         with yt_dlp.YoutubeDL(opts) as ydl: ydl.download([url])
-        
         files = glob.glob(os.path.join(temp_dir, 'media_*'))
         gc.collect()
-        
         if files:
             print(f"✅ Se encontraron {len(files)} archivos.", flush=True)
             return files
@@ -171,7 +170,7 @@ def download_video(url):
         shutil.rmtree(temp_dir, ignore_errors=True)
         return None
 
-# --- ANÁLISIS CON GEMINI (SOPORTE MULTI-ARCHIVO) ---
+# --- ANÁLISIS CON GEMINI (MIME TYPES CORREGIDOS) ---
 def analyze_with_gemini(file_paths_list):
     print(f"📤 Subiendo {len(file_paths_list)} archivos a Gemini...", flush=True)
     
@@ -179,10 +178,29 @@ def analyze_with_gemini(file_paths_list):
     
     try:
         for path in file_paths_list:
-            if not path.lower().endswith(('.mp4', '.jpg', '.jpeg', '.png', '.webp', '.mp3', '.m4a')):
+            # Filtro básico de extensiones
+            if not path.lower().endswith(('.mp4', '.jpg', '.jpeg', '.png', '.webp', '.mp3', '.m4a', '.wav')):
                 continue
-                
-            f = genai.upload_file(path=path)
+
+            # --- DETECCIÓN DE MIME TYPE (ESTO ARREGLA EL ERROR 422) ---
+            mime_type, _ = mimetypes.guess_type(path)
+            
+            # Si mimetypes falla, lo forzamos manualmente
+            if not mime_type:
+                ext = path.lower().split('.')[-1]
+                if ext in ['jpg', 'jpeg']: mime_type = 'image/jpeg'
+                elif ext == 'png': mime_type = 'image/png'
+                elif ext == 'webp': mime_type = 'image/webp'
+                elif ext == 'mp4': mime_type = 'video/mp4'
+                elif ext == 'mp3': mime_type = 'audio/mpeg'
+                elif ext == 'm4a': mime_type = 'audio/mp4'
+                elif ext == 'wav': mime_type = 'audio/wav'
+                else: mime_type = 'application/octet-stream' # Fallback
+            
+            print(f"   📄 Subiendo: {os.path.basename(path)} como {mime_type}", flush=True)
+            
+            # Subimos con el mime_type explícito
+            f = genai.upload_file(path=path, mime_type=mime_type)
             
             attempts = 0
             while f.state.name == "PROCESSING": 
@@ -193,6 +211,8 @@ def analyze_with_gemini(file_paths_list):
             
             if f.state.name == "ACTIVE":
                 uploaded_files.append(f)
+            else:
+                print(f"   ⚠️ Archivo falló o sigue procesando: {f.state.name}", flush=True)
 
         if not uploaded_files:
             raise Exception("No se pudieron subir archivos válidos a Gemini.")
@@ -258,14 +278,10 @@ def analyze_video_route():
     try:
         data = request.json
         raw_url = data.get('url') if isinstance(data, dict) else data[0].get('url')
-        
-        # Limpieza inicial
         url = raw_url.split('?')[0]
         
-        # --- FIX PARA FOTOS DE TIKTOK ---
-        # yt-dlp a veces falla con /photo/, lo disfrazamos de /video/
+        # Disfraz para fotos de TikTok
         if '/photo/' in url:
-            print("📸 Detectado enlace de fotos. Aplicando disfraz de video...", flush=True)
             url = url.replace('/photo/', '/video/')
         
         print(f"📡 Recibida petición: {url}", flush=True)
