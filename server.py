@@ -24,7 +24,7 @@ load_dotenv()
 API_KEY = os.getenv("API_KEY")
 UNSPLASH_KEY = os.getenv("UNSPLASH_ACCESS_KEY") 
 
-print("🚀 INICIANDO: BICHIBICHI SERVER (v6.0 - MODO TORTUGA ANTI-LÍMITES)...", flush=True)
+print("🚀 INICIANDO: BICHIBICHI SERVER (v7.2 - GEMINI 2.5 + AGENTS 2025)...", flush=True)
 
 if not API_KEY: print("❌ FATAL: API_KEY no encontrada.", flush=True)
 else:
@@ -131,21 +131,23 @@ def process_single_item(item):
         }
     except: return None
 
-# --- DESCARGA ROBUSTA ---
+# --- DESCARGA ROBUSTA CON AGENTES ACTUALIZADOS (2025) ---
 def download_video(url):
     print(f"⬇️ Intentando descargar: {url}", flush=True)
     temp_dir = tempfile.mkdtemp()
     tmpl = os.path.join(temp_dir, f'media_{int(time.time())}.%(ext)s')
     
-    # IMPORTANTE: Configuramos cookies si existen
     cookie_file = 'cookies.txt' if os.path.exists('cookies.txt') else None
     
     if cookie_file:
         print("🍪 Usando Cookies...", flush=True)
     else:
-        print("⚠️ ALERTA: Sin cookies. Probabilidad de fallo alta.", flush=True)
+        print("⚠️ ALERTA: Sin cookies.", flush=True)
 
-    # Opciones de descarga
+    # USER AGENTS MODERNOS (2025)
+    UA_DESKTOP = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36'
+    UA_MOBILE = 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.6 Mobile/15E148 Safari/604.1'
+
     opts = { 
         'format': 'best', 
         'outtmpl': tmpl, 
@@ -153,16 +155,14 @@ def download_video(url):
         'no_warnings': True, 
         'nocheckcertificate': True,
         'socket_timeout': 30,
-        'ignoreerrors': True, # Si una foto falla, continúa con las otras
+        'ignoreerrors': True,
     }
     
     if cookie_file:
         opts['cookiefile'] = cookie_file
-        # Headers de PC para cookies
-        opts['http_headers'] = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'}
+        opts['http_headers'] = {'User-Agent': UA_DESKTOP, 'Referer': 'https://www.tiktok.com/'}
     else:
-        # Headers de iPhone si NO hay cookies (a veces ayuda, a veces no)
-        opts['http_headers'] = {'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 16_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.6 Mobile/15E148 Safari/604.1'}
+        opts['http_headers'] = {'User-Agent': UA_MOBILE, 'Referer': 'https://www.tiktok.com/'}
 
     try:
         with yt_dlp.YoutubeDL(opts) as ydl: ydl.download([url])
@@ -174,18 +174,32 @@ def download_video(url):
     shutil.rmtree(temp_dir, ignore_errors=True)
     return None
 
-# --- ANÁLISIS CON MODO TORTUGA (ANTI-LÍMITES) ---
-def analyze_with_gemini(file_paths_list):
-    print(f"📤 Preparando {len(file_paths_list)} archivos para Gemini...", flush=True)
+# --- ANÁLISIS CON GEMINI 2.5 FLASH ---
+def analyze_with_gemini_retry(file_paths_list):
+    # Aquí es vital el reintento por si chocamos con el límite de 2.5
+    max_retries = 1
+    for attempt in range(max_retries + 1):
+        try:
+            return analyze_with_gemini_core(file_paths_list)
+        except Exception as e:
+            err_str = str(e)
+            if "429" in err_str or "quota" in err_str.lower():
+                if attempt < max_retries:
+                    print(f"⏳ Límite de 2.5 alcanzado. Esperando 30 seg...", flush=True)
+                    time.sleep(30)
+                    continue
+            raise e
+
+def analyze_with_gemini_core(file_paths_list):
+    print(f"📤 Preparando {len(file_paths_list)} archivos para Gemini 2.5...", flush=True)
     uploaded_files = []
     
     try:
-        # --- BUCLE DE SUBIDA LENTO ---
         for i, path in enumerate(file_paths_list):
             if not path.lower().endswith(('.mp4', '.jpg', '.jpeg', '.png', '.webp', '.mp3', '.m4a', '.wav')): continue
 
             mime_type, _ = mimetypes.guess_type(path)
-            if not mime_type: # Fallback
+            if not mime_type:
                 ext = path.lower().split('.')[-1]
                 if ext in ['jpg', 'jpeg']: mime_type = 'image/jpeg'
                 elif ext == 'png': mime_type = 'image/png'
@@ -194,14 +208,11 @@ def analyze_with_gemini(file_paths_list):
                 elif ext == 'mp3': mime_type = 'audio/mpeg'
                 else: mime_type = 'application/octet-stream'
             
-            print(f"   🐢 Subiendo archivo {i+1}/{len(file_paths_list)}... (Pausando para no saturar)", flush=True)
+            # Modo tortuga activado (4 segundos para proteger el límite de 2.5)
+            print(f"   🐢 Subiendo {i+1}/{len(file_paths_list)}...", flush=True)
             f = genai.upload_file(path=path, mime_type=mime_type)
-            
-            # --- PAUSA DE SEGURIDAD DE 4 SEGUNDOS ---
-            # Esto evita el error 429 de "20 requests per minute"
             time.sleep(4) 
             
-            # Verificación rápida
             attempts = 0
             while f.state.name == "PROCESSING": 
                 time.sleep(1)
@@ -213,6 +224,7 @@ def analyze_with_gemini(file_paths_list):
 
         if not uploaded_files: raise Exception("No se pudieron subir archivos.")
 
+        # --- AQUÍ ESTÁ EL CAMBIO SOLICITADO ---
         model = genai.GenerativeModel(model_name="gemini-2.5-flash")
         
         prompt = """
@@ -231,7 +243,6 @@ def analyze_with_gemini(file_paths_list):
         response = model.generate_content(content_payload, generation_config={"response_mime_type": "application/json"})
         raw_data = json.loads(response.text.replace("```json", "").replace("```", "").strip())
         
-        # Limpieza nube
         for f in uploaded_files:
             try: genai.delete_file(f.name)
             except: pass
@@ -258,10 +269,9 @@ def analyze_video_route():
         
         files_list = download_video(url)
         if not files_list: 
-            # Mensaje de error amigable para el frontend
-            return jsonify({"error": "Error de descarga. TikTok bloqueó el servidor o el link expiró."}), 500
+            return jsonify({"error": "Error de descarga (TikTok User-Agent). Intenta de nuevo."}), 500
         
-        results_raw = analyze_with_gemini(files_list)
+        results_raw = analyze_with_gemini_retry(files_list)
         
         if isinstance(results_raw, dict): results_raw = [results_raw]
         final_results = []
@@ -278,7 +288,6 @@ def analyze_video_route():
         
     except Exception as e: 
         print(f"❌ Error Servidor: {str(e)}", flush=True)
-        # Si el error es de cuota, avisamos al usuario
         if "429" in str(e):
             return jsonify({"error": "Límite de IA alcanzado. Espera 1 minuto."}), 429
         traceback.print_exc()
@@ -297,7 +306,10 @@ def chat_guide():
         for p in raw_places:
             places_context.append(f"- {p.get('placeName')} ({p.get('category')}): {p.get('summary')} Score: {p.get('score')}")
         places_str = "\n".join(places_context[-50:])
+        
+        # --- AQUÍ TAMBIÉN VOLVEMOS A 2.5 ---
         model = genai.GenerativeModel(model_name="gemini-2.5-flash")
+        
         prompt = f"Guía Bichibichi (ESPAÑOL). DATA: {places_str}. USER: {user_message}."
         response = model.generate_content(prompt)
         return jsonify({"reply": response.text})
